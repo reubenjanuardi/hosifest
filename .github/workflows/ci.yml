@@ -168,7 +168,7 @@ jobs:
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@v0.3.1
         with:
-          version: v0.55.2
+          version: v0.69.3
 
       # HIGH/CRITICAL findings fail the build. Trivy exits non-zero on findings
       # when --exit-code is set.
@@ -191,5 +191,4 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-
 
