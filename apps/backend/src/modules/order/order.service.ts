@@ -387,7 +387,7 @@ export class OrderService {
           quantity,
           group.unitPrice,
           group.discountPerTicket * quantity,
-          group.unitPrice * quantity,
+          (group.unitPrice - group.discountPerTicket) * quantity,
           group.name,
           JSON.stringify(metadata),
         ],
