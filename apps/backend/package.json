@@ -33,8 +33,15 @@
     "vitest": "^2.1.8"
   },
   "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
-  }
+      "onlyBuiltDependencies": [
+        "esbuild"
+      ],
+      "overrides": {
+        "brace-expansion": "^5.0.10",
+        "ip-address": "^10.3.1",
+        "pacote": "^21.5.1",
+        "picomatch": "^4.0.4",
+        "sigstore": "^4.1.1"
+      }
+    }
 }
