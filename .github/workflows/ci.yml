@@ -27,6 +27,23 @@ jobs:
   quality:
     name: Typecheck, tests, build
     runs-on: ubuntu-latest
+    # Real PostgreSQL so the integration suite exercises the real migrations
+    # and seeders. The suite self-skips when TEST_DATABASE_URL is unset, which
+    # is why the service + TEST_DATABASE_URL below must stay in sync.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hosifest_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,22 +58,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-
-      # Real PostgreSQL so the integration suite exercises the real migrations
-      # and seeders. The suite self-skips when TEST_DATABASE_URL is unset, which
-      # is why it must be provided here for CI to be meaningful.
-      - name: Start PostgreSQL
-        uses: supercharge/postgres-action@v2
-        with:
-          username: postgres
-          password: postgres
-          database: hosifest_test
-          port: 5432
-          options: >-
-            --health-cmd pg_isready
-            --health-interval 10s
-            --health-timeout 5s
-            --health-retries 5
+          # Backend and frontend are independent pnpm projects with their own
+          # lockfiles; setup-node would otherwise look for one at the repo root.
+          cache-dependency-path: |
+            apps/backend/pnpm-lock.yaml
+            apps/frontend/pnpm-lock.yaml
 
       - name: Install backend dependencies (frozen lockfile)
         working-directory: apps/backend
