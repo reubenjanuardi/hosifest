@@ -166,14 +166,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend
 
       - name: Install Trivy
-        uses: aquasecurity/setup-trivy@v0.2.3
+        uses: aquasecurity/setup-trivy@v0.3.1
         with:
           version: v0.55.2
 
       # HIGH/CRITICAL findings fail the build. Trivy exits non-zero on findings
       # when --exit-code is set.
       - name: Scan backend image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: hosifest-backend:ci
           format: table
@@ -183,7 +183,7 @@ jobs:
           exit-code: "1"
 
       - name: Scan frontend image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: hosifest-frontend:ci
           format: table
