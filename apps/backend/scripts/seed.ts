@@ -27,15 +27,16 @@ const here = dirname(fileURLToPath(import.meta.url));
 function resolveSeedersDir(): string {
   const override = process.env.SEEDERS_DIR;
   if (override) return resolve(override);
-  const candidates = [
-    resolve(here, '..', '..', '..', 'seeders'), // scripts -> repo/seeders (dev)
-    resolve(here, '..', '..', 'seeders'), // dist/scripts -> app/seeders (prod image)
-    resolve(here, '..', 'seeders'),
-  ];
-  for (const candidate of candidates) {
+
+  let dir = here;
+  for (let depth = 0; depth < 6; depth += 1) {
+    const candidate = resolve(dir, 'seeders');
     if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
-  return candidates[candidates.length - 1]!;
+  return resolve(here, '..', '..', 'seeders');
 }
 
 const SEEDERS_DIR = resolveSeedersDir();

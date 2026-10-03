@@ -18,23 +18,28 @@ import { loadEnv } from '../src/config/env.js';
 const here = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Resolve the migrations directory for both execution layouts:
- *   - dev via tsx: scripts/migrate.ts   -> <repo>/migrations
- *   - prod compiled: dist/scripts/migrate.js -> <app>/migrations
- * MIGRATIONS_DIR may be set explicitly to override.
+ * Resolve the migrations directory for every execution layout:
+ *   - dev via tsx:     scripts/migrate.ts     -> <repo>/migrations
+ *   - CI:              dist/scripts/migrate.js -> <repo>/migrations
+ *   - prod image:      dist/scripts/migrate.js -> <app>/migrations
+ *
+ * Walks ancestor directories rather than hardcoding a depth, so the compiled
+ * script keeps working when the compiled output sits at a different nesting
+ * level. MIGRATIONS_DIR may be set explicitly to override.
  */
 function resolveMigrationsDir(): string {
   const override = process.env.MIGRATIONS_DIR;
   if (override) return resolve(override);
-  const candidates = [
-    resolve(here, '..', '..', '..', 'migrations'), // scripts -> repo/migrations (dev via tsx)
-    resolve(here, '..', '..', 'migrations'),      // dist/scripts -> app/migrations (prod image)
-    resolve(here, '..', 'migrations'),
-  ];
-  for (const candidate of candidates) {
+
+  let dir = here;
+  for (let depth = 0; depth < 6; depth += 1) {
+    const candidate = resolve(dir, 'migrations');
     if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
-  return candidates[candidates.length - 1]!;
+  return resolve(here, '..', '..', 'migrations');
 }
 
 const MIGRATIONS_DIR = resolveMigrationsDir();

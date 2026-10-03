@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.scripts.json && node -e \"const fs=require('fs'),p=require('path');const s='dist-scripts/scripts';if(fs.existsSync(s)){fs.mkdirSync('dist/scripts',{recursive:true});for(const f of fs.readdirSync(s))fs.renameSync(p.join(s,f),p.join('dist/scripts',f));fs.rmSync('dist-scripts',{recursive:true,force:true});}\"",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.scripts.json && node -e \"const fs=require('fs');if(fs.existsSync('dist-scripts')){fs.cpSync('dist-scripts','dist',{recursive:true});fs.rmSync('dist-scripts',{recursive:true,force:true});}\"",
     "start": "node dist/server.js",
     "migrate": "node dist/scripts/migrate.js",
     "typecheck": "tsc --noEmit",

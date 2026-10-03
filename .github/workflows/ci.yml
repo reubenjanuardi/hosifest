@@ -78,10 +78,15 @@ jobs:
         working-directory: apps/backend
         run: pnpm run typecheck
 
+      # DATABASE_URL, JWT_SECRET and APP_URL are all validated by the backend env
+      # schema, so every step that boots application code needs all three even
+      # though only the migrations/seeders touch the database.
       - name: Apply migrations (integration schema)
         working-directory: apps/backend
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
+          JWT_SECRET: test-secret-key-for-ci-testing
+          APP_URL: http://localhost:3001
         run: |
           pnpm build
           node dist/scripts/migrate.js
@@ -90,12 +95,16 @@ jobs:
         working-directory: apps/backend
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
+          JWT_SECRET: test-secret-key-for-ci-testing
+          APP_URL: http://localhost:3001
         run: node dist/scripts/seed.js --include-dev
 
       - name: Unit + integration tests (backend)
         working-directory: apps/backend
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
+          JWT_SECRET: test-secret-key-for-ci-testing
+          APP_URL: http://localhost:3001
         run: pnpm run test
 
       - name: Typecheck (frontend)
