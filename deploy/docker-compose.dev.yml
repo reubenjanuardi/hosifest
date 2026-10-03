@@ -1,0 +1,121 @@
+# HOSIFEST — local development stack.
+#
+# Differences from production:
+#  - images are built from source (see `dockerfile:` keys), not pulled from GHCR
+#  - Postgres is bound to 127.0.0.1 only, for local tooling (psql, DBeaver).
+#    This binding is loopback-only and MUST NOT be copied into production.
+#  - dev-only tooling (npm-run-all style scripts) is not included; run the
+#    documented commands in deploy/README.md instead.
+#
+# Production rules that still apply here: the app never talks to Postgres from
+# anything other than the backend, and hosiana_network stays external-only.
+
+name: hosifest-dev
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  frontend:
+    build:
+      context: ../apps/frontend
+      dockerfile: Dockerfile
+      target: build
+    restart: unless-stopped
+    init: true
+    logging: *default-logging
+    command: ["pnpm", "dev", "--hostname", "0.0.0.0", "--port", "3000"]
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8080/api}
+      API_INTERNAL_URL: http://backend:3000
+      BACKEND_UPSTREAM: ${BACKEND_UPSTREAM:-backend:3000}
+      TZ: ${TZ:-Asia/Jakarta}
+    ports:
+      # Loopback only: this port must never be bound to a public interface.
+      - "127.0.0.1:8080:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - hosiana_network
+      - hosifest_app
+
+  backend:
+    build:
+      # Repo-root context so the image can include the root migrations/ directory.
+      context: ..
+      dockerfile: apps/backend/Dockerfile
+      target: build
+    command: ["pnpm", "dev"]
+    restart: unless-stopped
+    init: true
+    logging: *default-logging
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8080/api}
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:-}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-hosifest-local}
+      PAYMENT_CONFIGURATION: ${PAYMENT_CONFIGURATION:-{"mode":"manual"}}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      TZ: ${TZ:-Asia/Jakarta}
+    ports:
+      # Loopback only, for local API debugging.
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hosifest_app
+      - hosifest_data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      # DEV ONLY — loopback binding. Never replicate into docker-compose.prod.yml.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hosifest}
+      POSTGRES_USER: ${POSTGRES_USER:-hosifest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    networks:
+      - hosifest_data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    shm_size: 256mb
+
+networks:
+  hosiana_network:
+    external: true
+    name: ${HOSIANA_NETWORK_NAME:-hosiana_network}
+  hosifest_app:
+    driver: bridge
+  hosifest_data:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data_dev:
+    name: hosifest_postgres_data_dev

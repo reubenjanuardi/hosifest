@@ -1,0 +1,180 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push supersedes an in-flight run for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PNPM_VERSION: "9.15.0"
+  NODE_VERSION: "22"
+
+jobs:
+  quality:
+    name: Typecheck, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      # Real PostgreSQL so the integration suite exercises the real migrations
+      # and seeders. The suite self-skips when TEST_DATABASE_URL is unset, which
+      # is why it must be provided here for CI to be meaningful.
+      - name: Start PostgreSQL
+        uses: supercharge/postgres-action@v2
+        with:
+          username: postgres
+          password: postgres
+          database: hosifest_test
+          port: 5432
+          options: >-
+            --health-cmd pg_isready
+            --health-interval 10s
+            --health-timeout 5s
+            --health-retries 5
+
+      - name: Install backend dependencies (frozen lockfile)
+        working-directory: apps/backend
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies (frozen lockfile)
+        working-directory: apps/frontend
+        run: pnpm install --frozen-lockfile
+
+      # Steps are intentionally separate so a failure names the exact stage
+      # that broke. A missing or failing script fails the job on purpose.
+      - name: Typecheck (backend)
+        working-directory: apps/backend
+        run: pnpm run typecheck
+
+      - name: Apply migrations (integration schema)
+        working-directory: apps/backend
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
+        run: |
+          pnpm build
+          node dist/scripts/migrate.js
+
+      - name: Apply seed data (including dev fixtures)
+        working-directory: apps/backend
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
+        run: node dist/scripts/seed.js --include-dev
+
+      - name: Unit + integration tests (backend)
+        working-directory: apps/backend
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
+        run: pnpm run test
+
+      - name: Typecheck (frontend)
+        working-directory: apps/frontend
+        run: pnpm run typecheck
+
+      - name: Build backend
+        working-directory: apps/backend
+        run: pnpm build
+
+      - name: Build frontend
+        working-directory: apps/frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: pnpm build
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-build:
+    name: Docker build + image scan
+    runs-on: ubuntu-latest
+    needs: [quality]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          # Repo-root context: the image ships the root migrations/ directory.
+          context: .
+          file: apps/backend/Dockerfile
+          load: true
+          tags: hosifest-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/frontend
+          file: apps/frontend/Dockerfile
+          load: true
+          tags: hosifest-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.2.3
+        with:
+          version: v0.55.2
+
+      # HIGH/CRITICAL findings fail the build. Trivy exits non-zero on findings
+      # when --exit-code is set.
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: hosifest-backend:ci
+          format: table
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: hosifest-frontend:ci
+          format: table
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+

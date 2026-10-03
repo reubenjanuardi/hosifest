@@ -1,0 +1,38 @@
+# Dependencies and build output
+node_modules
+dist
+build
+coverage
+*.tsbuildinfo
+
+# NOTE: migrations/*.sql MUST NOT be excluded. The runtime image ships
+# migrations/ so the deploy step can run them without a source checkout.
+*.dump
+*.tar.gz
+
+# Tests are not needed at runtime
+tests
+test
+
+# Secrets must never enter the build context
+.env
+.env.*
+!.env.example
+secrets
+*.pem
+*.key
+
+# Repo-level files irrelevant to the backend image
+.git
+.github
+.codex
+deploy
+docs
+hosifest-system-design
+tests-e2e
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+.vscode
+.idea
+*.log

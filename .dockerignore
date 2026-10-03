@@ -1,0 +1,77 @@
+# Repository-root build-context ignore.
+#
+# The BACKEND image is built with the repository root as its context, because it
+# must ship the database migrations that live in the root `migrations/` directory
+# (DATABASE-owned). That lets the VPS run migrations without a source checkout.
+#
+#   docker build -f apps/backend/Dockerfile -t hosifest-backend:local .
+#
+# This is a DENYLIST on purpose. An allowlist (`*` + re-includes) relies on
+# re-inclusion semantics that differ subtly between Docker and gitignore, and a
+# mistake there would silently strip `migrations/` out of the image.
+#
+# The FRONTEND image keeps its own context (`apps/frontend`) and uses
+# `apps/frontend/.dockerignore`.
+
+# --- Secrets: must never enter any build context -------------------------
+.env
+.env.*
+**/.env
+**/.env.*
+**/secrets
+**/*.pem
+**/*.key
+**/*.p12
+
+# --- Dependencies and build output (the bulk of the context) -------------
+**/node_modules
+**/.pnpm-store
+**/.next
+**/dist
+**/build
+**/out
+**/coverage
+**/.turbo
+**/*.tsbuildinfo
+
+# --- Version control and tooling state ------------------------------------
+.git
+.github
+.codex
+**/.git
+
+# --- Not needed by the backend image -------------------------------------
+# The frontend builds from its own context; exclude it here so the backend
+# context stays lean.
+apps/frontend
+
+# Documentation and local editor/OS state.
+hosifest-system-design
+docs
+**/tests
+**/test
+**/.vscode
+**/.idea
+**/.DS_Store
+**/Thumbs.db
+
+# Deploy tooling and compose files.
+deploy
+**/docker-compose*.yml
+**/Dockerfile
+**/.dockerignore
+
+# Runtime noise and logs.
+logs
+tmp
+**/logs
+**/tmp
+**/*.log
+**/*.dump
+**/*.tar.gz
+
+# Local database data directories (never ship a database in an image).
+.pgdata
+postgres-data
+**/.pgdata
+**/postgres-data

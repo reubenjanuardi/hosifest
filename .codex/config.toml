@@ -1,0 +1,52 @@
+# HOSIFEST project-local Codex configuration.
+#
+# IMPORTANT (validated against codex-cli 0.153.4 on this machine):
+# This version of Codex does NOT load `.codex/config.toml` from the working
+# directory. `codex doctor` reports the config source as the user config at
+# $CODEX_HOME/config.toml, and values set here are ignored (verified with an
+# invalid `approval_policy` and `model` override that had no effect).
+#
+# To activate the roles below, merge the [agents.*] and [features.multi_agent_v2]
+# tables into your user config:
+#   $CODEX_HOME/config.toml   (default: C:\Users\Pongo\.codex\config.toml)
+# Relative `config_file` paths resolve against $CODEX_HOME.
+#
+# Copy this file to $CODEX_HOME/config.toml and merge its contents into the
+# existing user config; do not overwrite unrelated user settings.
+#
+# Schema verified on this machine:
+#   - [agents.<role>] supports exactly: description, config_file, nickname_candidates
+#   - role config files accept: name, model, model_provider, model_reasoning_effort,
+#     sandbox_mode, approval_policy, developer_instructions, web_search, ...
+#   - [features.multi_agent_v2] accepts max_concurrent_threads_per_session,
+#     max_depth is NOT accepted under multi_agent_v2 (it belongs to the v1 table).
+
+[agents.database]
+description = "Database engineer for HOSIFEST schema, migrations, constraints and seed data."
+config_file = "agents/database.toml"
+nickname_candidates = ["database", "db", "postgres", "sql"]
+
+[agents.backend]
+description = "Backend engineer for HOSIFEST domain logic and REST API."
+config_file = "agents/backend.toml"
+nickname_candidates = ["backend", "api", "server"]
+
+[agents.frontend]
+description = "Frontend engineer for HOSIFEST public site, checkout and e-ticket."
+config_file = "agents/frontend.toml"
+nickname_candidates = ["frontend", "web", "ui"]
+
+[agents.devops]
+description = "DevOps engineer for Docker, CI/CD, GHCR, VPS and Cloudflare integration."
+config_file = "agents/devops.toml"
+nickname_candidates = ["devops", "infra", "docker", "cicd"]
+
+[agents.qa]
+description = "QA engineer for unit, integration, E2E and acceptance testing."
+config_file = "agents/qa.toml"
+nickname_candidates = ["qa", "test", "tests"]
+
+# Concurrency ceiling for multi-agent sessions.
+# Wave 1 uses ROOT + 4 workers; QA runs after the workers report back.
+[features.multi_agent_v2]
+max_concurrent_threads_per_session = 6

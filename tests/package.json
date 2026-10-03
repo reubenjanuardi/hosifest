@@ -1,0 +1,16 @@
+{
+  "name": "@hosifest/qa",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "HOSIFEST acceptance test suite. QA-owned. See tests/README.md.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test .build/qa/",
+    "test:only": "node --test .build/qa/"
+  }
+}

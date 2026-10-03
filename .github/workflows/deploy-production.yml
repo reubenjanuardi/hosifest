@@ -1,0 +1,101 @@
+name: Deploy Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Immutable image tag to deploy, e.g. sha-<commit>"
+        required: true
+        type: string
+
+# 20-ci-cd-pipeline.md section 10: two releases must never update the VPS at
+# the same time. cancel-in-progress is false so a queued release is never
+# silently dropped mid-deploy.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  REGISTRY: ghcr.io
+  DEPLOY_PATH: /opt/hosifest
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    steps:
+      - name: Checkout (for deploy scripts only)
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+        run: |
+          TAG="${INPUT_TAG:-sha-${GITHUB_SHA}}"
+          if ! [[ "$TAG" =~ ^sha-[0-9a-f]{40}$ ]]; then
+            echo "::error::image tag must be sha-<40-hex-commit>, got: $TAG"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Deploying $REGISTRY/${{ github.repository }} at $TAG"
+
+      # The VPS needs the deploy scripts on disk. The repository is NOT required
+      # on the VPS for normal operation — images are pulled from GHCR.
+      - name: Sync deploy scripts to VPS
+        run: |
+          ssh -p "${{ secrets.VPS_PORT || 22 }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "mkdir -p '$DEPLOY_PATH/deploy/scripts'"
+          scp -P "${{ secrets.VPS_PORT || 22 }}" -r deploy/scripts/. \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:$DEPLOY_PATH/deploy/scripts/"
+          scp -P "${{ secrets.VPS_PORT || 22 }}" deploy/docker-compose.prod.yml \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:$DEPLOY_PATH/deploy/docker-compose.prod.yml"
+
+      - name: Verify host preconditions (read-only)
+        run: |
+          ssh -p "${{ secrets.VPS_PORT || 22 }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "chmod +x '$DEPLOY_PATH'/deploy/scripts/*.sh && '$DEPLOY_PATH'/deploy/scripts/verify-host.sh"
+
+      # Runs entirely on the VPS: preflight -> pull -> migrate -> up -d -> health gate.
+      # deploy.sh never prints secret values; it only echoes variable NAMES.
+      - name: Deploy (pull, migrate, up -d, health gate)
+        env:
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          IMAGE_REGISTRY: ${{ env.REGISTRY }}/${{ github.repository }}
+        run: |
+          ssh -p "${{ secrets.VPS_PORT || 22 }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "cd '$DEPLOY_PATH' && IMAGE_TAG='$IMAGE_TAG' IMAGE_REGISTRY='$IMAGE_REGISTRY' \
+             '$DEPLOY_PATH'/deploy/scripts/deploy.sh"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Production deployment"
+            echo ""
+            echo "- commit: \`${{ github.sha }}\`"
+            echo "- image tag: \`${{ steps.tag.outputs.tag || 'n/a' }}\`"
+            echo "- registry: \`${{ env.REGISTRY }}/${{ github.repository }}\`"
+            echo "- result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

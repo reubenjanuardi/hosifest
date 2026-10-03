@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# Releases must serialize; never build and overwrite the same SHA concurrently.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  REGISTRY: ghcr.io
+  NODE_VERSION: "22"
+  PNPM_VERSION: "9.15.0"
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install backend dependencies
+        working-directory: apps/backend
+        run: pnpm install --frozen-lockfile
+      - name: Build backend
+        working-directory: apps/backend
+        run: pnpm build
+      - name: Install frontend dependencies
+        working-directory: apps/frontend
+        run: pnpm install --frozen-lockfile
+      - name: Build frontend
+        working-directory: apps/frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: pnpm build
+
+  publish:
+    name: Publish images to GHCR
+    runs-on: ubuntu-latest
+    needs: [verify]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-frontend
+            ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend
+          tags: |
+            type=sha,format=sha-,prefix=sha-
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Image names follow 20-ci-cd-pipeline.md section 3:
+      #   ghcr.io/<org>/hosifest-frontend:sha-<commit>
+      #   ghcr.io/<org>/hosifest-backend:sha-<commit>
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          # Repo-root context: the image ships the root migrations/ directory.
+          context: .
+          file: apps/backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/frontend
+          file: apps/frontend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.2.3
+        with:
+          version: v0.55.2
+
+      # Scan AFTER push: the tag is immutable and already recorded, so a
+      # vulnerability finding blocks the *deployment*, not the audit trail.
+      - name: Scan published images
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend:sha-${{ github.sha }}
+          format: table
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Summarise published images
+        run: |
+          {
+            echo "### Images published"
+            echo ""
+            echo "- \`${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend:sha-${{ github.sha }}\`"
+            echo "- \`${{ env.REGISTRY }}/${{ github.repository }}/hosifest-frontend:sha-${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

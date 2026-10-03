@@ -1,0 +1,142 @@
+# HOSIFEST — production stack (modular monolith).
+#
+# Ingress:  Internet -> EXISTING Cloudflare Tunnel (cloudflared container)
+#                      -> hosiana_network
+#                      -> hosifest-frontend (nginx, port 8080)
+#                      -> /api/* reverse proxy
+#                      -> hosifest-backend (private network only)
+#                      -> hosifest-postgres (private network only, no published ports)
+#
+# HARD RULES ENFORCED HERE:
+#  - hosiana_network is PRE-EXISTING and declared `external: true`.
+#    Docker Compose never creates, alters or removes it.
+#  - cloudflared is NOT declared here. The existing tunnel container is owned by
+#    the VPS operator and already attaches to hosiana_network. HOSIFEST only
+#    joins the frontend to that network so the existing tunnel can reach it.
+#  - postgres has NO `ports:` block in this file. It is reachable only from
+#    hosifest-backend over the internal data network.
+
+name: hosifest
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  frontend:
+    image: ${IMAGE_REGISTRY:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-hosifest}}/hosifest-frontend:${IMAGE_TAG:?IMAGE_TAG is required}
+    restart: unless-stopped
+    init: true
+    logging: *default-logging
+    environment:
+      NODE_ENV: production
+      # Public, browser-visible URL of the API as reached through this frontend.
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL is required}
+      APP_URL: ${APP_URL:?APP_URL is required}
+      # nginx /api reverse-proxy target; resolved at runtime by Docker DNS.
+      BACKEND_UPSTREAM: ${BACKEND_UPSTREAM:-backend:3000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TZ: ${TZ:-Asia/Jakarta}
+    networks:
+      - hosiana_network      # bridges the PRE-EXISTING Cloudflare Tunnel to this app
+      - hosifest_app         # allows nginx to resolve `backend` for /api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  backend:
+    image: ${IMAGE_REGISTRY:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-hosifest}}/hosifest-backend:${IMAGE_TAG:?IMAGE_TAG is required}
+    restart: unless-stopped
+    init: true
+    logging: *default-logging
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      APP_URL: ${APP_URL:?APP_URL is required}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL is required}
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:?STORAGE_ENDPOINT is required}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:?STORAGE_BUCKET is required}
+      PAYMENT_CONFIGURATION: ${PAYMENT_CONFIGURATION:?PAYMENT_CONFIGURATION is required}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TZ: ${TZ:-Asia/Jakarta}
+      # Payment-proof storage. The local driver writes under this path, which is
+      # backed by a named volume so proofs survive container replacement.
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      STORAGE_LOCAL_ROOT: /var/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Payment proof files MUST survive `up -d` (11-security-and-operations.md).
+      - backend_storage:/var/storage
+    networks:
+      - hosifest_app   # egress-capable (payment gateway, object storage)
+      - hosifest_data  # private, internal-only, database reachable
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    # NO `ports:` — PostgreSQL is never published, not even on localhost.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hosifest}
+      POSTGRES_USER: ${POSTGRES_USER:-hosifest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    networks:
+      - hosifest_data   # internal: true -> no route off the VPS host
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    shm_size: 256mb
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+networks:
+  # PRE-EXISTING on the VPS. Referenced only. Compose must never manage it.
+  hosiana_network:
+    external: true
+    name: ${HOSIANA_NETWORK_NAME:-hosiana_network}
+
+  # Created and owned by this compose project. Default bridge.
+  hosifest_app:
+    driver: bridge
+
+  # internal: true -> containers on this network have no route off the host.
+  hosifest_data:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:
+    name: hosifest_postgres_data
+  backend_storage:
+    name: hosifest_backend_storage
