@@ -8,7 +8,7 @@ import { StatusBadge } from '@/components/ui/StatusBadge';
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
-  params: { ticketCode: string };
+  params: Promise<{ ticketCode: string }>;
 }
 
 function DetailRow({ label, value }: { label: string; value: string }) {
@@ -27,17 +27,18 @@ function DetailRow({ label, value }: { label: string; value: string }) {
  * The QR token is only encoded into an image — it is never displayed as text.
  */
 export default async function TicketPage({ params }: PageProps) {
-  const ticketCode = decodeURIComponent(params.ticketCode);
+  const { ticketCode } = await params;
+  const decodedTicketCode = decodeURIComponent(ticketCode);
 
   let ticket: Awaited<ReturnType<typeof getTicket>>;
   try {
-    ticket = await getTicket(ticketCode);
+    ticket = await getTicket(decodedTicketCode);
   } catch {
     return (
       <div className="mx-auto w-full max-w-2xl px-4 py-10 sm:px-6">
         <Callout tone="danger" title="Ticket not found">
           We could not load ticket{' '}
-          <span className="font-mono font-semibold">{ticketCode}</span>. Please check the
+          <span className="font-mono font-semibold">{decodedTicketCode}</span>. Please check the
           code and try again.
         </Callout>
       </div>

@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Select ticket' };
 
 interface PageProps {
-  params: { offerId: string };
+  params: Promise<{ offerId: string }>;
 }
 
 /**
@@ -19,8 +19,9 @@ interface PageProps {
  * type all work through this one page.
  */
 export default async function OfferSelectionPage({ params }: PageProps) {
+  const { offerId } = await params;
   const catalog = await getEventCatalog();
-  const offer = catalog.offers.find((candidate) => candidate.id === params.offerId);
+  const offer = catalog.offers.find((candidate) => candidate.id === offerId);
 
   if (!offer) notFound();
 

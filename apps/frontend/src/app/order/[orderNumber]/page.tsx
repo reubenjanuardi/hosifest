@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Order status' };
 
 interface PageProps {
-  params: { orderNumber: string };
+  params: Promise<{ orderNumber: string }>;
 }
 
 /**
@@ -16,12 +16,13 @@ interface PageProps {
  * round-trip.
  */
 export default async function OrderStatusPage({ params }: PageProps) {
-  const orderNumber = decodeURIComponent(params.orderNumber);
-  const initialOrder = await getOrder(orderNumber).catch(() => null);
+  const { orderNumber } = await params;
+  const decodedOrderNumber = decodeURIComponent(orderNumber);
+  const initialOrder = await getOrder(decodedOrderNumber).catch(() => null);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-10 sm:px-6">
-      <OrderStatusView orderNumber={orderNumber} initialOrder={initialOrder} />
+      <OrderStatusView orderNumber={decodedOrderNumber} initialOrder={initialOrder} />
     </div>
   );
 }

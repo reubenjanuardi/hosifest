@@ -28,6 +28,10 @@ RUN pnpm build
 # ---- runtime ----------------------------------------------------------------
 FROM nginx:1.29-alpine AS runner
 
+# Pull latest patched Alpine libs (c-ares, curl, openssl, expat, ...) —
+# base image tags lag behind security releases.
+RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
+
 # nginx resolves the backend at request time via Docker's embedded DNS, so a
 # backend restart does not cascade into an nginx restart.
 #
