@@ -26,7 +26,7 @@ COPY . .
 RUN pnpm build
 
 # ---- runtime ----------------------------------------------------------------
-FROM nginx:1.27-alpine AS runner
+FROM nginx:1.29-alpine AS runner
 
 # nginx resolves the backend at request time via Docker's embedded DNS, so a
 # backend restart does not cascade into an nginx restart.
