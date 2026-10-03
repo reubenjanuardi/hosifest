@@ -350,6 +350,7 @@ describeIfDb('order creation against the real schema', () => {
     const first = groups[0];
     const second = groups[1];
     expect(first && second).toBeTruthy();
+    expect(beverage, 'AC-SOU-03: the Presale offer requires a real beverage option').not.toBe('');
     if (!first || !second) return;
 
     const result = await container.orders.createOrder({
@@ -361,13 +362,13 @@ describeIfDb('order creation against the real schema', () => {
           quantity: 2,
           tickets: [
             {
-              beverageOptionId: first.options[0]?.id ?? '',
+              beverageOptionId: beverage,
               souvenirSelections: [
                 { optionGroupId: first.id, optionId: first.options[0]?.id ?? '', quantity: 1 },
               ],
             },
             {
-              beverageOptionId: second.options[0]?.id ?? '',
+              beverageOptionId: beverage,
               souvenirSelections: [
                 { optionGroupId: second.id, optionId: second.options[0]?.id ?? '', quantity: 1 },
               ],

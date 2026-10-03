@@ -81,6 +81,16 @@ export async function openSalesWindows(db: Database): Promise<void> {
             active_from  = now() - interval '1 day',
             active_until = now() + interval '1 day'`,
   );
+  // The seeded Early Bird window is closed by design (seeders/003 and
+  // seeders/005), so a test that exercises a discount code must open that
+  // window itself. Seed dates are business configuration and are never
+  // widened to make a test pass; the QA harness already works this way.
+  await db.query(
+    `UPDATE discount_codes
+        SET status = 'ACTIVE',
+            active_from  = now() - interval '1 day',
+            active_until = now() + interval '1 day'`,
+  );
 }
 
 export async function cleanupOrders(db: Database): Promise<void> {
