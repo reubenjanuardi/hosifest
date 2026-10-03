@@ -181,6 +181,11 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          # The node:22-bookworm-slim base ships a global npm whose transitive
+          # deps carry HIGH CVEs. The app never invokes that npm at runtime
+          # (entrypoint is `node dist/server.js`), so exclude it from the scan
+          # while still scanning /app library deps.
+          skip-files: usr/local/lib/node_modules/**
 
       - name: Scan frontend image
         uses: aquasecurity/trivy-action@v0.36.0
