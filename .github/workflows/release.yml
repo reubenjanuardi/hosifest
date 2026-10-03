@@ -38,6 +38,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          # Backend and frontend are independent pnpm projects with their own
+          # lockfiles; setup-node would otherwise look for one at the repo root.
+          cache-dependency-path: |
+            apps/backend/pnpm-lock.yaml
+            apps/frontend/pnpm-lock.yaml
       - name: Install backend dependencies
         working-directory: apps/backend
         run: pnpm install --frozen-lockfile
