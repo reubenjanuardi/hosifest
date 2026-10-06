@@ -115,14 +115,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend
 
       - name: Install Trivy
-        uses: aquasecurity/setup-trivy@v0.2.3
+        uses: aquasecurity/setup-trivy@v0.3.1
         with:
-          version: v0.55.2
+          version: v0.69.3
 
       # Scan AFTER push: the tag is immutable and already recorded, so a
       # vulnerability finding blocks the *deployment*, not the audit trail.
       - name: Scan published images
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend:sha-${{ github.sha }}
           format: table
