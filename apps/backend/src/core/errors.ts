@@ -71,7 +71,12 @@ export function generateOrderNumber(now: Date = new Date()): string {
   const yy = String(now.getUTCFullYear()).slice(-2);
   const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
   const stamp = Date.now().toString(36).toUpperCase().slice(-6);
-  const suffix = randomBytes(3).toString('hex').toUpperCase();
+  // 4 bytes (not 3): `stamp` is effectively constant inside a tight loop, so
+  // the suffix carries ALL the entropy. orders.order_number is UNIQUE, and 3
+  // bytes (16.7M) gives a ~12% birthday-collision chance across 2000 numbers —
+  // a real production collision rate, not just a flaky test. 4 bytes (4.29e9)
+  // drops that to ~0.05%.
+  const suffix = randomBytes(4).toString('hex').toUpperCase();
   return `HOS-${yy}${mm}-${stamp}-${suffix}`;
 }
 
