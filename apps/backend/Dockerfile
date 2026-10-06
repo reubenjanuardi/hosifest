@@ -35,8 +35,11 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends curl \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g npm@latest \
+ && npm cache clean --force
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
