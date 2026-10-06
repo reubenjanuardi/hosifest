@@ -73,15 +73,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata (tags + labels)
-        id: meta
+      - name: Docker metadata (backend)
+        id: meta_backend
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend
+          tags: |
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Docker metadata (frontend)
+        id: meta_frontend
         uses: docker/metadata-action@v5
         with:
           images: |
             ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-frontend
-            ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend
           tags: |
-            type=sha,format=sha-,prefix=sha-
+            type=sha,format=long
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
 
@@ -91,6 +101,8 @@ jobs:
       # Image names follow 20-ci-cd-pipeline.md section 3:
       #   ghcr.io/<org>/hosifest-frontend:sha-<commit>
       #   ghcr.io/<org>/hosifest-backend:sha-<commit>
+      # format=long keeps the full 40-hex SHA so the tag matches the
+      # ^sha-[0-9a-f]{40}$ pattern deploy-production.yml enforces.
       - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
@@ -98,8 +110,8 @@ jobs:
           context: .
           file: apps/backend/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_backend.outputs.tags }}
+          labels: ${{ steps.meta_backend.outputs.labels }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
@@ -109,8 +121,8 @@ jobs:
           context: apps/frontend
           file: apps/frontend/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_frontend.outputs.tags }}
+          labels: ${{ steps.meta_frontend.outputs.labels }}
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
