@@ -70,5 +70,26 @@ export function adminOrderRoutes(container: Container): FastifyPluginAsync {
       return sendData(reply, { ...order, tickets });
     });
 
+    // Short-lived read URL for the stored proof file, so finance can review
+    // the evidence without the bucket ever being public.
+    app.get('/admin/payments/:id/proof-url', async (request, reply) => {
+      authorize(request, 'payment:review');
+      const { id } = parseOrThrow(idParams, request.params);
+      const { rows } = await container.db.query<{ proof_file_key: string | null }>(
+        'SELECT proof_file_key FROM payments WHERE id = $1',
+        [id],
+      );
+      const payment = rows[0];
+      if (!payment) throw new AppError('PAYMENT_NOT_FOUND', 'Payment not found.', 404, { id });
+      if (!payment.proof_file_key) {
+        throw new AppError('PROOF_NOT_FOUND', 'No proof file stored for this payment.', 404, {
+          id,
+        });
+      }
+      const url = await container.storage.presignedGetUrl(payment.proof_file_key);
+      const ttl = container.env.STORAGE_DRIVER === 's3' ? 900 : null;
+      return sendData(reply, { url, expiresInSeconds: ttl });
+    });
+
   };
 }

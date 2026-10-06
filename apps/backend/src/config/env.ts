@@ -21,6 +21,8 @@ const envSchema = z.object({
   // S3-compatible driver is used so the deploy layer can configure the bucket.
   STORAGE_ENDPOINT: z.string().optional(),
   STORAGE_BUCKET: z.string().optional(),
+  STORAGE_ACCESS_KEY_ID: z.string().optional(),
+  STORAGE_SECRET_ACCESS_KEY: z.string().optional(),
   // Public origin the API is reached through (behind the Cloudflare Tunnel).
   PUBLIC_API_URL: z.string().url().optional(),
   // Payment provider configuration. MVP is manual proof verification

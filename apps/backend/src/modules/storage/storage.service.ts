@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { AppError } from '../../core/errors.js';
 import type { Env } from '../../config/env.js';
-import { isAllowedMime } from '../order/order.routes.js';
 
 const EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -11,6 +12,14 @@ const EXTENSIONS: Record<string, string> = {
   'image/webp': 'webp',
   'application/pdf': 'pdf',
 };
+
+function isAllowedMime(mime: string, allowedCsv: string): boolean {
+  const allowed = allowedCsv
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return allowed.includes(mime.trim().toLowerCase());
+}
 
 /**
  * Payment proof storage (11-security-and-operations.md).
@@ -21,7 +30,23 @@ const EXTENSIONS: Record<string, string> = {
  * stored key is what `payments.proof_file_key` references.
  */
 export class StorageService {
-  constructor(private readonly env: Env) {}
+  private readonly s3: S3Client | null;
+
+  constructor(private readonly env: Env) {
+    if (env.STORAGE_DRIVER === 's3') {
+      this.s3 = new S3Client({
+        region: 'auto',
+        endpoint: env.STORAGE_ENDPOINT,
+        credentials: {
+          accessKeyId: env.STORAGE_ACCESS_KEY_ID ?? '',
+          secretAccessKey: env.STORAGE_SECRET_ACCESS_KEY ?? '',
+        },
+        forcePathStyle: true,
+      });
+    } else {
+      this.s3 = null;
+    }
+  }
 
   private get root(): string {
     return resolve(this.env.STORAGE_LOCAL_ROOT);
@@ -58,8 +83,19 @@ export class StorageService {
     }
   }
 
-  /** Local-disk driver. S3 driver is left to the deploy layer (CI-03). */
-  async put(key: string, content: Buffer): Promise<string> {
+  /** Store bytes under `key`. Returns the key (never a public URL). */
+  async put(key: string, content: Buffer, mimeType?: string): Promise<string> {
+    if (this.s3) {
+      await this.s3.send(
+        new PutObjectCommand({
+          Bucket: this.env.STORAGE_BUCKET,
+          Key: key,
+          Body: content,
+          ContentType: mimeType,
+        }),
+      );
+      return key;
+    }
     const target = resolve(join(this.root, key));
     // Path traversal guard: the resolved path must stay under the root.
     if (!target.startsWith(this.root)) {
@@ -68,5 +104,39 @@ export class StorageService {
     await mkdir(join(target, '..'), { recursive: true });
     await writeFile(target, content, { mode: 0o640 });
     return key;
+  }
+
+  /** Remove a stored object. Missing keys are ignored. */
+  async remove(key: string): Promise<void> {
+    if (this.s3) {
+      await this.s3.send(
+        new DeleteObjectCommand({ Bucket: this.env.STORAGE_BUCKET, Key: key }),
+      );
+      return;
+    }
+    const target = resolve(join(this.root, key));
+    if (!target.startsWith(this.root)) {
+      throw new AppError('STORAGE_ERROR', 'Invalid storage key.', 400);
+    }
+    try {
+      await unlink(target);
+    } catch {
+      // Already gone — nothing to do.
+    }
+  }
+
+  /**
+   * Short-lived read URL for admin review of a proof file.
+   * S3 driver: presigned GET. Local driver: app-served path.
+   */
+  async presignedGetUrl(key: string, expiresInSeconds = 900): Promise<string> {
+    if (this.s3) {
+      return getSignedUrl(
+        this.s3,
+        new GetObjectCommand({ Bucket: this.env.STORAGE_BUCKET, Key: key }),
+        { expiresIn: expiresInSeconds },
+      );
+    }
+    return `${this.env.STORAGE_BASE_URL}/${key}`;
   }
 }

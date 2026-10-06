@@ -280,8 +280,8 @@ export class PaymentService {
    * the ledger matches the "counted per ticket" rule.
    */
   private async linkUsagesToTickets(client: PoolClient, orderId: string): Promise<void> {
-    const { rows } = await client.query<{ id: string; ticket_id: string }>(
-      `SELECT t.id, t.ticket_id FROM tickets t
+    const { rows } = await client.query<{ ticket_id: string }>(
+      `SELECT t.id AS ticket_id FROM tickets t
          JOIN order_items oi ON oi.id = t.order_item_id
         WHERE oi.order_id = $1 AND t.discount_code_id IS NOT NULL
         ORDER BY oi.created_at, t.sequence_number`,

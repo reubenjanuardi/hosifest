@@ -80,30 +80,68 @@ export function publicOrderRoutes(container: Container): FastifyPluginAsync {
       { config: { rateLimit: proofLimit } },
       async (request, reply) => {
         const { orderNumber } = parseOrThrow(orderNumberParams, request.params);
-        const body = parseOrThrow(paymentProofSchema, request.body);
 
-        if (body.proofMimeType && !isAllowedMime(body.proofMimeType, env.STORAGE_ALLOWED_MIME)) {
-          throw new AppError(
-            'UNSUPPORTED_FILE_TYPE',
-            'Payment proof file type is not allowed.',
-            422,
-            { allowed: env.STORAGE_ALLOWED_MIME },
-          );
-        }
-        if (body.proofSizeBytes && body.proofSizeBytes > env.STORAGE_MAX_UPLOAD_BYTES) {
-          throw new AppError(
-            'FILE_TOO_LARGE',
-            'Payment proof file exceeds the maximum allowed size.',
-            413,
-            { maxBytes: env.STORAGE_MAX_UPLOAD_BYTES },
-          );
+        // Multipart carries one file plus the method/amount/reference fields.
+        // `request.parts()` is the single consumer of the stream, so it is
+        // iterated exactly once and each part is dispatched by type.
+        const fields: Record<string, string> = {};
+        let upload: { mimeType: string; buffer: Buffer } | null = null;
+
+        for await (const part of request.parts()) {
+          if (part.type === 'file') {
+            if (upload) {
+              throw new AppError(
+                'VALIDATION_ERROR',
+                'Only one payment proof file may be uploaded.',
+                422,
+              );
+            }
+            const chunks: Buffer[] = [];
+            for await (const chunk of part.file) {
+              chunks.push(chunk as Buffer);
+            }
+            upload = { mimeType: part.mimetype, buffer: Buffer.concat(chunks) };
+          } else {
+            fields[part.fieldname] = String(part.value);
+          }
         }
 
-        const { order, payment } = await container.orderQueries.submitPaymentProof(orderNumber, {
-          method: body.method,
-          amount: body.amount,
-          proofFileKey: body.proofFileKey,
+        if (!upload) {
+          throw new AppError('VALIDATION_ERROR', 'Payment proof file is required.', 422);
+        }
+
+        // Validate the stored evidence, never the client's own byte count.
+        container.storage.validate(upload.mimeType, upload.buffer.length);
+
+        const { method, amount, reference } = parseOrThrow(paymentProofSchema, {
+          method: fields.method,
+          amount: Number(fields.amount),
+          reference: fields.reference,
         });
+
+        // Key is always server generated, so a client can neither choose the
+        // destination nor overwrite another customer's proof.
+        const proofKey = container.storage.buildProofKey(upload.mimeType, orderNumber);
+        await container.storage.put(proofKey, upload.buffer, upload.mimeType);
+
+        let submitted;
+        try {
+          submitted = await container.orderQueries.submitPaymentProof(orderNumber, {
+            method,
+            amount,
+            reference,
+            proofFileKey: proofKey,
+          });
+        } catch (error) {
+          // Order was expired / cancelled / already paid: the upload has no
+          // payment row pointing at it, so drop the orphaned object.
+          await container.storage.remove(proofKey).catch(() => {
+            // Best effort — an orphan object is preferable to a failed request.
+          });
+          throw error;
+        }
+
+        const { order, payment } = submitted;
 
         return sendData(
           reply,

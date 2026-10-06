@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import { ZodError } from 'zod';
 import { loadEnv, type Env } from './config/env.js';
@@ -71,6 +72,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   // Authentication + RBAC gate for /admin.
   await app.register(authPlugin, { identity: container.identity });
+
+  // Multipart upload for payment-proof files. Limits duplicate the env
+  // values so oversized bodies are rejected before buffering.
+  await app.register(multipart, {
+    limits: { fileSize: env.STORAGE_MAX_UPLOAD_BYTES, files: 1 },
+    attachFieldsToBody: false,
+  });
 
   app.decorate('hosifest', container);
 

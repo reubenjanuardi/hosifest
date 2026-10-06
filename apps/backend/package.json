@@ -7,7 +7,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "node --env-file=.env --import tsx/esm src/server.ts",
+    "dev:watch": "tsx watch --env-file=.env src/server.ts",
     "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.scripts.json && node -e \"const fs=require('fs');if(fs.existsSync('dist-scripts')){fs.cpSync('dist-scripts','dist',{recursive:true});fs.rmSync('dist-scripts',{recursive:true,force:true});}\"",
     "start": "node dist/server.js",
     "migrate": "node dist/scripts/migrate.js",
@@ -18,6 +19,9 @@
     "build:migrate": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/s3-request-presigner": "^3.1146.0",
+    "@fastify/multipart": "^10.1.2",
     "@fastify/rate-limit": "^10.2.2",
     "fastify": "^5.2.1",
     "jsonwebtoken": "^9.0.2",
@@ -33,15 +37,15 @@
     "vitest": "^2.1.8"
   },
   "pnpm": {
-      "onlyBuiltDependencies": [
-        "esbuild"
-      ],
-      "overrides": {
-        "brace-expansion": "^5.0.10",
-        "ip-address": "^10.3.1",
-        "pacote": "^21.5.1",
-        "picomatch": "^4.0.4",
-        "sigstore": "^4.1.1"
-      }
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "overrides": {
+      "brace-expansion": "^5.0.10",
+      "ip-address": "^10.3.1",
+      "pacote": "^21.5.1",
+      "picomatch": "^4.0.4",
+      "sigstore": "^4.1.1"
     }
+  }
 }

@@ -23,7 +23,7 @@ services:
     build:
       context: ../apps/frontend
       dockerfile: Dockerfile
-      target: build
+      target: builder
     restart: unless-stopped
     init: true
     logging: *default-logging
@@ -63,6 +63,9 @@ services:
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8080/api}
       STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:-}
       STORAGE_BUCKET: ${STORAGE_BUCKET:-hosifest-local}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-}
+      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
       PAYMENT_CONFIGURATION: ${PAYMENT_CONFIGURATION:-{"mode":"manual"}}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
       TZ: ${TZ:-Asia/Jakarta}

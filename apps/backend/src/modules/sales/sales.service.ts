@@ -91,6 +91,8 @@ export class SalesService {
          FROM ticket_offers o
          JOIN sales_phases p ON p.id = o.sales_phase_id
         WHERE p.event_id = $1
+          AND o.visibility <> 'RESTRICTED'
+          AND p.visibility <> 'RESTRICTED'
         ORDER BY p.display_order, o.sort_order, o.code`,
       [eventId],
     );
@@ -179,9 +181,29 @@ export class SalesService {
     if (congregationId) {
       const scoped = rows.find((row) => row.congregation_id === congregationId);
       if (scoped) return scoped;
+      // CONGREGATION_LIST buckets store their member congregations in the
+      // offer_allocation_congregations junction table, not in the single
+      // congregation_id column — check membership there too.
+      const listBuckets = rows.filter((row) => row.eligibility_type === 'CONGREGATION_LIST');
+      if (listBuckets.length > 0) {
+        const { rows: members } = await client.query<{ allocation_id: string }>(
+          `SELECT allocation_id FROM offer_allocation_congregations
+           WHERE congregation_id = $1`,
+          [congregationId],
+        );
+        const memberIds = new Set(members.map((m) => m.allocation_id));
+        const listed = listBuckets.find((row) => memberIds.has(row.id));
+        if (listed) return listed;
+      }
     }
     const free = rows.find((row) => row.eligibility_type === 'FREE');
     if (free) return free;
+
+    // No FREE bucket: prefer a CONGREGATION_LIST bucket over a DISCOUNT_CODE
+    // one so the caller reports CONGREGATION_REQUIRED rather than
+    // INVALID_DISCOUNT_CODE for a congregation-less attempt.
+    const listed = rows.find((row) => row.eligibility_type === 'CONGREGATION_LIST');
+    if (listed) return listed;
 
     // No FREE bucket: fall back to the first configured bucket so the caller
     // enforces that bucket's own eligibility rules.

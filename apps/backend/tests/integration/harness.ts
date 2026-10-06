@@ -54,13 +54,28 @@ export function makeDatabase(): Database {
   });
 }
 
-/** Reset mutable counters so each test starts from the seeded baseline. */
+/** Reset mutable counters AND quota values so each test starts from the seeded baseline. */
 export async function resetQuota(db: Database): Promise<void> {
   await db.query(
-    'UPDATE ticket_offers SET reserved_quantity = 0, sold_quantity = 0, updated_at = now()',
+    `UPDATE ticket_offers o
+        SET quota = s.quota, reserved_quantity = 0, sold_quantity = 0, updated_at = now()
+       FROM (VALUES
+         ('66666666-6666-4666-8666-666666666601'::uuid, 95),
+         ('66666666-6666-4666-8666-666666666602'::uuid, 55),
+         ('66666666-6666-4666-8666-666666666603'::uuid, 50)
+       ) AS s(id, quota)
+      WHERE o.id = s.id`,
   );
   await db.query(
-    'UPDATE offer_allocations SET reserved_quantity = 0, sold_quantity = 0, updated_at = now()',
+    `UPDATE offer_allocations a
+        SET quota = s.quota, reserved_quantity = 0, sold_quantity = 0, updated_at = now()
+       FROM (VALUES
+         ('77777777-7777-4777-8777-777777777701'::uuid, 35),
+         ('77777777-7777-4777-8777-777777777702'::uuid, 60),
+         ('77777777-7777-4777-8777-777777777703'::uuid, 55),
+         ('77777777-7777-4777-8777-777777777704'::uuid, 50)
+       ) AS s(id, quota)
+      WHERE a.id = s.id`,
   );
   await db.query(`UPDATE discount_usages SET status = 'RELEASED', released_at = now(), ticket_id = NULL`);
 }
