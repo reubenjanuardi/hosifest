@@ -40,29 +40,41 @@ jobs:
       - name: Checkout (for deploy scripts only)
         uses: actions/checkout@v4
 
-      # webfactory/ssh-agent only starts an agent from a PRIVATE KEY; it does
-      # not accept host/username/port. Those go into ~/.ssh/config below.
-      - name: Configure SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+      # Password auth (operator choice): sshpass -e reads the password from the
+      # SSHPASS environment variable, so it never appears in a command line or
+      # in the process list. Do not switch to `sshpass -p`.
+      - name: Install sshpass
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
 
-      - name: Write SSH config
+      - name: Configure SSH (password auth)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_PASSWORD: ${{ secrets.VPS_PASSWORD }}
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           {
             printf 'Host hosifest-vps\n'
-            printf '  HostName %s\n' "${{ secrets.VPS_HOST }}"
-            printf '  User %s\n' "${{ secrets.VPS_USER }}"
-            printf '  Port %s\n' "${{ secrets.VPS_PORT }}"
+            printf '  HostName %s\n' "$VPS_HOST"
+            printf '  User %s\n' "$VPS_USER"
+            printf '  Port %s\n' "${VPS_PORT:-22}"
             printf '  StrictHostKeyChecking accept-new\n'
             printf '  UserKnownHostsFile ~/.ssh/known_hosts\n'
           } >> "$HOME/.ssh/config"
           chmod 600 "$HOME/.ssh/config"
+          # Multiline heredoc form: survives newlines and quotes in the secret.
+          {
+            printf 'SSHPASS<<HOSIFEST_SSHPASS_EOF\n'
+            printf '%s\n' "$VPS_PASSWORD"
+            printf 'HOSIFEST_SSHPASS_EOF\n'
+          } >> "$GITHUB_ENV"
 
       - name: Verify SSH connectivity
-        run: ssh -T hosifest-vps 'echo SSH ok'
+        run: sshpass -e ssh hosifest-vps 'echo SSH ok'
 
       - name: Resolve image tag
         id: tag
@@ -81,13 +93,13 @@ jobs:
       # on the VPS for normal operation — images are pulled from GHCR.
       - name: Sync deploy scripts to VPS
         run: |
-          ssh hosifest-vps "mkdir -p '$DEPLOY_PATH/deploy/scripts'"
-          scp -r deploy/scripts/. "hosifest-vps:$DEPLOY_PATH/deploy/scripts/"
-          scp deploy/docker-compose.prod.yml "hosifest-vps:$DEPLOY_PATH/deploy/docker-compose.prod.yml"
+          sshpass -e ssh hosifest-vps "mkdir -p '$DEPLOY_PATH/deploy/scripts'"
+          sshpass -e scp -r deploy/scripts/. "hosifest-vps:$DEPLOY_PATH/deploy/scripts/"
+          sshpass -e scp deploy/docker-compose.prod.yml "hosifest-vps:$DEPLOY_PATH/deploy/docker-compose.prod.yml"
 
       - name: Verify host preconditions (read-only)
         run: |
-          ssh hosifest-vps \
+          sshpass -e ssh hosifest-vps \
             "chmod +x '$DEPLOY_PATH'/deploy/scripts/*.sh && '$DEPLOY_PATH'/deploy/scripts/verify-host.sh"
 
       # Runs entirely on the VPS: preflight -> pull -> migrate -> up -d -> health gate.
@@ -97,7 +109,7 @@ jobs:
           IMAGE_TAG: ${{ steps.tag.outputs.tag }}
           IMAGE_REGISTRY: ${{ env.REGISTRY }}/${{ github.repository }}
         run: |
-          ssh hosifest-vps \
+          sshpass -e ssh hosifest-vps \
             "cd '$DEPLOY_PATH' && IMAGE_TAG='$IMAGE_TAG' IMAGE_REGISTRY='$IMAGE_REGISTRY' \
              '$DEPLOY_PATH'/deploy/scripts/deploy.sh"
 
