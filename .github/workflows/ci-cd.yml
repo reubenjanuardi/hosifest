@@ -446,7 +446,13 @@ jobs:
       # deploy.sh never prints secret values; it only echoes variable NAMES.
       - name: Deploy (pull, migrate, up -d, health gate)
         env:
-          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          # Production runs the floating `latest` tag so the Portainer container
+          # list reads `hosifest-frontend:latest` instead of a bare commit sha.
+          # Determinism is preserved by EXPECT_IMAGE_REVISION below, not by the
+          # tag: deploy.sh fails unless the RUNNING container's
+          # org.opencontainers.image.revision equals this workflow's commit.
+          IMAGE_TAG: latest
+          EXPECT_IMAGE_REVISION: ${{ github.sha }}
           # IMAGE_REGISTRY is the owner namespace only. It must NOT include the
           # repository name: compose appends /hosifest-frontend and
           # /hosifest-backend, so including it here produced the doubled path
@@ -454,7 +460,9 @@ jobs:
           IMAGE_REGISTRY: ${{ env.REGISTRY }}/${{ github.repository_owner }}
         run: |
           sshpass -e ssh hosifest-vps \
-            "cd '$DEPLOY_PATH' && IMAGE_TAG='$IMAGE_TAG' IMAGE_REGISTRY='$IMAGE_REGISTRY' \
+            "cd '$DEPLOY_PATH' && IMAGE_TAG='$IMAGE_TAG' \
+             IMAGE_REGISTRY='$IMAGE_REGISTRY' \
+             EXPECT_IMAGE_REVISION='$EXPECT_IMAGE_REVISION' \
              '$DEPLOY_PATH'/deploy/scripts/deploy.sh"
 
       - name: Summary

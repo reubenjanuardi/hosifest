@@ -29,10 +29,10 @@ log()  { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 fail() { log "ERROR: $*"; exit 1; }
 
 IMAGE_TAG="${IMAGE_TAG:-}"
-[ -n "$IMAGE_TAG" ] || fail "IMAGE_TAG is required (immutable sha-* tag)"
+[ -n "$IMAGE_TAG" ] || fail "IMAGE_TAG is required (sha-<short-commit> or 'latest')"
 case "$IMAGE_TAG" in
-  sha-*) : ;;
-  *) fail "refusing non-SHA image tag: $IMAGE_TAG" ;;
+  sha-*|latest) : ;;
+  *) fail "refusing unrecognised image tag: $IMAGE_TAG (want sha-<short-commit> or latest)" ;;
 esac
 
 [ -f "$ENV_FILE" ] || fail "env file not found: $ENV_FILE"
@@ -70,6 +70,31 @@ compose run --rm backend npm run migrate
 # --- 4. up -----------------------------------------------------------------
 log "recreating containers"
 compose up -d --remove-orphans
+
+# --- 4b. verify the deployed revision ----------------------------------------
+# compose may run a floating tag (`:latest`), so the tag alone does NOT prove
+# which commit is live. A stale `latest` would otherwise pass every check below
+# while serving older code. publish stamps each image with
+# org.opencontainers.image.revision, so the RUNNING container is matched against
+# the commit this deploy targets. A mismatch fails the deployment.
+#
+# EXPECT_IMAGE_REVISION is supplied by the workflow (the full 40-hex github.sha).
+# It is optional: when IMAGE_TAG is an explicit sha tag, compose is already
+# deterministic and the tag itself is the identity.
+if [ -n "${EXPECT_IMAGE_REVISION:-}" ]; then
+  log "verifying the running images match revision ${EXPECT_IMAGE_REVISION}"
+  for svc in frontend backend; do
+    cid="$(compose ps -q "$svc" 2>/dev/null | head -1)"
+    [ -n "$cid" ] || fail "$svc container not found for the revision check"
+    actual="$(docker inspect \
+                --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+                "$cid" 2>/dev/null || true)"
+    if [ "$actual" != "$EXPECT_IMAGE_REVISION" ]; then
+      fail "$svc is running revision '$actual' but this deploy targets '$EXPECT_IMAGE_REVISION' (stale or wrong tag)"
+    fi
+    log "  $svc revision $actual OK"
+  done
+fi
 
 # --- 5. health gate --------------------------------------------------------
 log "waiting for containers to report healthy"
