@@ -82,11 +82,27 @@ Everything in this directory is authored against
   config, **not** in this repo):
 
   ```text
-  public hostname  ->  http://hosifest-frontend:8080
+  public hostname  ->  http://frontend:8080
   ```
 
   The tunnel's public origin is what the operator puts into `APP_URL` /
   `PUBLIC_API_URL` in `deploy/.env`.
+
+  **Use the service name `frontend`, not the container name.** Compose registers
+  aliases PER NETWORK, and only for the compose project name it owns. Verified on
+  the VPS with `docker inspect hosifest-frontend-1`:
+
+  ```text
+  net=hosiana_network          aliases=["hosifest-frontend-1","frontend"]
+  net=hosifest_hosifest_app    aliases=["hosifest-frontend-1","frontend"]
+  ```
+
+  There is no `hosifest-frontend` alias anywhere. Pointing the tunnel at it makes
+  Docker's embedded DNS answer SERVFAIL, which surfaces publicly as Cloudflare
+  `502` with `dial tcp: lookup hosifest-frontend on 127.0.0.11:53: server
+  misbehaving` in `docker logs cloudflared-tunnel`. Prefer `frontend` over
+  `hosifest-frontend-1` — the latter carries a numeric suffix that changes when
+  containers are recreated.
 
 - **Isolation.** No service in this stack declares a dependency on, references
   a name of, or otherwise touches unrelated containers on `hosiana_network`.
