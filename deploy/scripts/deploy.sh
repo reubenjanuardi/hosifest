@@ -112,6 +112,51 @@ until compose exec -T backend curl -fsS --max-time 5 \
 done
 log "/ready ok"
 
+# --- 5b. prune superseded images ---------------------------------------------
+# Everything above succeeded, so this commit is live and the previous one is
+# only a rollback candidate.
+#
+# `docker image prune -f` alone does NOT do this: it only removes *dangling*
+# (untagged) images. A superseded HOSIFEST tag is still tagged and referenced
+# by nothing, so it survives and keeps its ~400MB. Filtering by repository is
+# what actually reclaims the space.
+#
+# Scope is the two HOSIFEST repositories only. This VPS also runs
+# keuangan-gereja, war_konsumsi and web-placeholder; nothing here may touch
+# their images, and `docker system prune` would.
+#
+# The newest 2 tags per repository are kept so `.deployed-image-tag.previous`
+# can still be rolled back without re-pulling from GHCR.
+KEEP_IMAGE_TAGS="${KEEP_IMAGE_TAGS:-2}"
+pruned=0
+for repo in hosifest-frontend hosifest-backend; do
+  # Newest first. `docker images` sorts by CreatedAt descending already.
+  kept=0
+  while read -r image; do
+    [ -n "$image" ] || continue
+    kept=$(( kept + 1 ))
+    [ "$kept" -le "$KEEP_IMAGE_TAGS" ] && continue
+    # `latest` shares its image ID with the sha tag of the same build; deleting
+    # the sha tag is what frees the layers, so never prune by `latest` itself.
+    case "$image" in *:latest) continue ;; esac
+    if docker rmi "$image" >/dev/null 2>&1; then
+      log "  pruned $image"
+      pruned=$(( pruned + 1 ))
+    else
+      log "  could not prune $image (in use by a container)"
+    fi
+  done < <(docker images --format '{{.Repository}}:{{.Tag}}' \
+             | grep -F "/$repo:" || true)
+done
+log "pruned $pruned superseded image(s); kept the newest $KEEP_IMAGE_TAGS per project"
+
+# Dangling layers plus build cache older than a week. The `--until` filter
+# keeps recent cache useful for fast local rebuilds.
+log "pruning dangling layers and stale build cache"
+docker image prune -f >/dev/null
+docker builder prune -f --filter until=168h >/dev/null
+log "disk reclaimed"
+
 # --- 6. record -------------------------------------------------------------
 if [ -f "$STATE_FILE" ]; then
   cp "$STATE_FILE" "$STATE_FILE.previous"

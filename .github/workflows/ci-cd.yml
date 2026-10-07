@@ -278,6 +278,7 @@ jobs:
           images: |
             ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend
           tags: |
+            type=raw,value=latest
             type=sha,format=long
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
@@ -289,6 +290,7 @@ jobs:
           images: |
             ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-frontend
           tags: |
+            type=raw,value=latest
             type=sha,format=long
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
