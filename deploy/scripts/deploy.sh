@@ -125,9 +125,12 @@ log "/ready ok"
 # keuangan-gereja, war_konsumsi and web-placeholder; nothing here may touch
 # their images, and `docker system prune` would.
 #
-# The newest 2 tags per repository are kept so `.deployed-image-tag.previous`
-# can still be rolled back without re-pulling from GHCR.
-KEEP_IMAGE_TAGS="${KEEP_IMAGE_TAGS:-2}"
+# The newest 3 tags per repository are kept. `latest` counts as one of them
+# (it shares an image ID with the sha tag of the same build), so this is
+# really: the live sha tag, one superseded sha tag for rollback, and latest.
+# Keeping only 2 would let `latest` + the live sha occupy both slots and prune
+# the rollback candidate that .deployed-image-tag.previous still points at.
+KEEP_IMAGE_TAGS="${KEEP_IMAGE_TAGS:-3}"
 pruned=0
 for repo in hosifest-frontend hosifest-backend; do
   # Newest first. `docker images` sorts by CreatedAt descending already.

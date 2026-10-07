@@ -36,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Immutable image tag to deploy, e.g. sha-<commit>"
+        description: "Immutable image tag to deploy, e.g. sha-<short-commit>"
         required: false
         type: string
 
@@ -276,10 +276,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/hosifest-backend
           tags: |
             type=raw,value=latest
-            type=sha,format=long
+            type=sha,format=short
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
 
@@ -288,21 +288,23 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-frontend
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/hosifest-frontend
           tags: |
             type=raw,value=latest
-            type=sha,format=long
+            type=sha,format=short
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Image names follow 20-ci-cd-pipeline.md section 3:
-      #   ghcr.io/<org>/hosifest-frontend:sha-<commit>
-      #   ghcr.io/<org>/hosifest-backend:sha-<commit>
-      # format=long keeps the full 40-hex SHA so the tag matches the
-      # ^sha-[0-9a-f]{40}$ pattern the deploy job enforces.
+      # Images are pushed as sibling packages under the OWNER namespace:
+      #   ghcr.io/<owner>/hosifest-frontend:<tag>
+      #   ghcr.io/<owner>/hosifest-backend:<tag>
+      # Using github.repository here would nest them one level deeper
+      # (hosifest/hosifest-frontend) and duplicate the repository name.
+      # type=sha,format=short gives the 7-hex tag, matching the pattern the
+      # deploy job enforces.
       - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
@@ -337,7 +339,11 @@ jobs:
       - name: Scan published images
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend:sha-${{ github.sha }}
+          # metadata-action's `version` output is the exact tag it just pushed
+          # (sha-<short>), so this resolves the real image. Naming it by hand
+          # with ${{ github.sha }} would ask for the full 40-hex tag, which is
+          # no longer published.
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/hosifest-backend:${{ steps.meta_backend.outputs.version }}
           format: table
           vuln-type: os,library
           severity: HIGH,CRITICAL
@@ -350,8 +356,8 @@ jobs:
           {
             echo "### Images published"
             echo ""
-            echo "- \`${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend:sha-${{ github.sha }}\`"
-            echo "- \`${{ env.REGISTRY }}/${{ github.repository }}/hosifest-frontend:sha-${{ github.sha }}\`"
+            echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/hosifest-backend:sha-${{ github.sha }}\`"
+            echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/hosifest-frontend:sha-${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ==========================================================================
@@ -413,13 +419,15 @@ jobs:
         env:
           INPUT_TAG: ${{ inputs.image_tag }}
         run: |
-          TAG="${INPUT_TAG:-sha-${GITHUB_SHA}}"
-          if ! [[ "$TAG" =~ ^sha-[0-9a-f]{40}$ ]]; then
-            echo "::error::image tag must be sha-<40-hex-commit>, got: $TAG"
+          # Short SHA (7 hex) to match type=sha,format=short in publish.
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="${INPUT_TAG:-sha-${SHORT_SHA}}"
+          if ! [[ "$TAG" =~ ^sha-[0-9a-f]{7,40}$ ]]; then
+            echo "::error::image tag must be sha-<short-commit>, got: $TAG"
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Deploying $REGISTRY/${{ github.repository }} at $TAG"
+          echo "Deploying $REGISTRY/${{ github.repository_owner }} at $TAG"
 
       # The VPS needs the deploy scripts on disk. The repository is NOT required
       # on the VPS for normal operation — images are pulled from GHCR.
@@ -439,7 +447,11 @@ jobs:
       - name: Deploy (pull, migrate, up -d, health gate)
         env:
           IMAGE_TAG: ${{ steps.tag.outputs.tag }}
-          IMAGE_REGISTRY: ${{ env.REGISTRY }}/${{ github.repository }}
+          # IMAGE_REGISTRY is the owner namespace only. It must NOT include the
+          # repository name: compose appends /hosifest-frontend and
+          # /hosifest-backend, so including it here produced the doubled path
+          # ghcr.io/<org>/hosifest/hosifest-frontend (93 chars per image ref).
+          IMAGE_REGISTRY: ${{ env.REGISTRY }}/${{ github.repository_owner }}
         run: |
           sshpass -e ssh hosifest-vps \
             "cd '$DEPLOY_PATH' && IMAGE_TAG='$IMAGE_TAG' IMAGE_REGISTRY='$IMAGE_REGISTRY' \
@@ -453,6 +465,6 @@ jobs:
             echo ""
             echo "- commit: \`${{ github.sha }}\`"
             echo "- image tag: \`${{ steps.tag.outputs.tag || 'n/a' }}\`"
-            echo "- registry: \`${{ env.REGISTRY }}/${{ github.repository }}\`"
+            echo "- registry: \`${{ env.REGISTRY }}/${{ github.repository_owner }}\`"
             echo "- result: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"

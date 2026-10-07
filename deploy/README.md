@@ -160,7 +160,7 @@ quality ─┬─> image-scan ────> publish ────> deploy
   from GHCR and does **not** need the source repository on the VPS.
 - The `publish` job tags with `type=sha,format=long`, producing
   `sha-<full-commit-sha>`.
-- The `deploy` job refuses any tag that is not `sha-<40-hex>`.
+- The `deploy` job refuses any tag that is not `sha-<short-commit>`.
 - The image references live in `deploy/docker-compose.prod.yml` via
   `IMAGE_REGISTRY` and `IMAGE_TAG`:
 
@@ -224,7 +224,7 @@ chmod 600 deploy/.env
 
 | Variable | Secret? | Notes |
 | --- | --- | --- |
-| `IMAGE_TAG` | no | `sha-<commit>`. Set per deployment by the workflow. |
+| `IMAGE_TAG` | no | `sha-<short-commit>`. Set per deployment by the workflow. |
 | `IMAGE_REGISTRY` | no | e.g. `ghcr.io/your-org`. |
 | `NODE_ENV` | no | `production`. Compose pins it anyway. |
 | `APP_URL` | no | Canonical public origin, e.g. `https://hosifest.example.id`. |
@@ -313,7 +313,7 @@ can never push an image or touch the VPS.
 ```bash
 # On the VPS
 cd /opt/stacks/hosifest
-IMAGE_TAG=sha-<commit> deploy/scripts/deploy.sh
+IMAGE_TAG=sha-<short-commit> deploy/scripts/deploy.sh
 ```
 
 `deploy.sh` order of operations:
