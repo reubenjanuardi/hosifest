@@ -38,8 +38,13 @@ RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
 
 # Node runtime for the Next.js standalone server. Pinned to the same major as
 # the build stages so the standalone output's ABI matches.
+#
+# ONLY the node binary is copied. /usr/local/lib/node_modules holds npm and
+# corepack, which the runtime never executes (`node server.js` needs neither),
+# and they drag in ~10 HIGH CVEs from their own dependency tree — brace-expansion,
+# ip-address, pacote, picomatch, sigstore. Copying them in made Trivy's blocking
+# gate fail on a package the container cannot execute. Nothing else is copied.
 COPY --from=builder /usr/local/bin/node /usr/local/bin/node
-COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf /usr/local/bin/node /usr/bin/node
 
 # nginx resolves the backend at request time via Docker's embedded DNS, so a
