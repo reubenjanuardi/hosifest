@@ -114,10 +114,22 @@ apps/backend/Dockerfile       multi-stage, non-root, HEALTHCHECK /health (contex
 .dockerignore                   repo-root context rules; keeps migrations/, drops secrets + frontend
 
 .github/workflows/
-├── ci.yml                        PR/push: lint, typecheck, test, build, image scan
-├── release.yml                   main: build, scan, push SHA-tagged images to GHCR
-└── deploy-production.yml         main: SSH deploy, migrations, health gate
+└── ci-cd.yml                    single pipeline: quality → image-scan → publish → deploy
 ```
+
+The former `ci.yml`, `release.yml` and `deploy-production.yml` were merged into
+`ci-cd.yml`. The job graph is still linear and each stage keeps its own job, so
+the conceptual separation required by 20-ci-cd-pipeline.md section 9 survives the
+merge:
+
+```text
+quality ─┬─> image-scan ────> publish ────> deploy
+         └─> secret-scan            (PR runs stop after these two)
+```
+
+`image-scan` is the blocking vulnerability gate (runs before anything is pushed);
+`publish` pushes the immutable `sha-<commit>` tags and re-scans with
+`exit-code: 0` as the audit record for a tag already in the registry.
 
 ---
 
@@ -130,9 +142,9 @@ apps/backend/Dockerfile       multi-stage, non-root, HEALTHCHECK /health (contex
 
 - Production uses **SHA tags only** — never `latest`. Production pulls images
   from GHCR and does **not** need the source repository on the VPS.
-- `release.yml` tags with `type=sha,format=sha-,prefix=sha-`, producing
-  `sha-<commit>`.
-- `deploy-production.yml` refuses any tag that is not `sha-<40-hex>`.
+- The `publish` job tags with `type=sha,format=long`, producing
+  `sha-<full-commit-sha>`.
+- The `deploy` job refuses any tag that is not `sha-<40-hex>`.
 - The image references live in `deploy/docker-compose.prod.yml` via
   `IMAGE_REGISTRY` and `IMAGE_TAG`:
 
@@ -178,7 +190,7 @@ Actions. See section 3.
 
 ### GitHub Environment
 
-`deploy-production.yml` declares `environment: production`. Create it in
+The `deploy` job of `ci-cd.yml` declares `environment: production`. Create it in
 **Settings → Environments** and, if desired, require reviewer approval so a
 merge to `main` cannot deploy without a human.
 
@@ -265,13 +277,22 @@ safe to re-run (idempotent where appropriate). Migrations run **before**
 ### 7.2 Automatic deployment (merge to `main`)
 
 ```text
-release.yml      build → scan → push ghcr.io/<org>/hosifest-{frontend,backend}:sha-<commit>
-deploy-production.yml
-                 concurrency group: deploy-production (never parallel)
+ci-cd.yml        quality ─┬─> image-scan ────> publish ────> deploy
+                          └─> secret-scan
+
+quality          typecheck, migrations, seeds, unit + integration tests, builds
+secret-scan      gitleaks over full history
+image-scan       blocking Trivy gate (exit 1 on HIGH/CRITICAL), before any push
+publish          build + push sha-<commit> to GHCR, audit scan (exit 0)
+deploy           concurrency group: ci-cd-<ref> (never parallel on main)
                  SSH: sync deploy scripts
                  SSH: verify-host.sh (read-only)
                  SSH: deploy.sh → preflight, pull, migrate, up -d, /ready gate
 ```
+
+A pull_request run stops after `image-scan` and `secret-scan`: `publish` and
+`deploy` are both guarded by `if: github.event_name != 'pull_request'`, so a PR
+can never push an image or touch the VPS.
 
 ### 7.3 Manual deployment / re-run
 

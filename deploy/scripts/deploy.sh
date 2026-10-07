@@ -2,8 +2,8 @@
 # ---------------------------------------------------------------------------
 # HOSIFEST — VPS-side deployment runner.
 #
-# Invoked by .github/workflows/deploy-production.yml over SSH. It never builds
-# images; production consumes immutable images already present in GHCR.
+# Invoked by the `deploy` job of .github/workflows/ci-cd.yml over SSH. It never
+# builds images; production consumes immutable images already present in GHCR.
 #
 # Usage (on the VPS):
 #   IMAGE_TAG=sha-<commit> deploy/scripts/deploy.sh

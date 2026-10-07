@@ -131,12 +131,27 @@ Never print secrets in CI logs.
 
 ```text
 .github/workflows/
-├── ci.yml
-├── release.yml
-└── deploy-production.yml
+└── ci-cd.yml
 ```
 
-They may be combined if the repository's operational model is simpler, but CI and production deployment should remain conceptually separated.
+CI and production deployment may be combined in a single file, as this repository
+does. When they are, keep the stages as separate JOBS with an explicit linear
+`needs` chain so a failing stage still stops everything downstream, and keep the
+conceptual separation of the stages:
+
+```text
+quality ─┬─> image-scan ────> publish ────> deploy
+         └─> secret-scan
+```
+
+- `quality` — install, typecheck, migrations, seeders, unit + integration tests, build
+- `secret-scan` — committed-secret scanning over full history
+- `image-scan` — build images and scan them BEFORE anything is pushed (blocking)
+- `publish` — build and push immutable `sha-<commit>` tags, then scan as an audit record
+- `deploy` — update the VPS
+
+A `pull_request` event must never reach `publish` or `deploy`; guard both with
+`if: github.event_name != 'pull_request'`.
 
 ## 10. Concurrency
 

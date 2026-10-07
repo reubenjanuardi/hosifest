@@ -35,16 +35,35 @@ const skipReason = DOCKER
   ? undefined
   : 'no Docker daemon reachable from this agent (dynamic verification BLOCKED)';
 
-const ci = existsSync(join(REPO_ROOT, '.github/workflows/ci.yml'))
-  ? read('.github/workflows/ci.yml')
+// The three workflows (ci.yml, release.yml, deploy-production.yml) were merged
+// into a single .github/workflows/ci-cd.yml. Assertions below that must hold for
+// only ONE stage (e.g. "publish pushes, deploy must not push") now slice out that
+// job rather than reading a whole file, so a merged file still proves the same
+// property instead of trivially matching everything at once.
+const pipeline = existsSync(join(REPO_ROOT, '.github/workflows/ci-cd.yml'))
+  ? read('.github/workflows/ci-cd.yml')
   : '';
-const deployWorkflow = existsSync(join(REPO_ROOT, '.github/workflows/deploy-production.yml'))
-  ? read('.github/workflows/deploy-production.yml')
-  : '';
-// GHCR publishing lives in the release workflow; deploy-production only pulls.
-const releaseWorkflow = existsSync(join(REPO_ROOT, '.github/workflows/release.yml'))
-  ? read('.github/workflows/release.yml')
-  : '';
+
+/** Return the YAML source of a single job in the merged pipeline file. */
+function jobSource(workflow: string, jobName: string): string {
+  const lines = workflow.split(/\r?\n/);
+  const start = lines.findIndex((l) => new RegExp(`^  ${jobName}:\\s*$`).test(l));
+  if (start < 0) return '';
+  // Consume until the next job key at the same indent (or end of file).
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join('\n');
+}
+
+const ci = pipeline;
+// GHCR publishing lives in the publish job; the deploy job only pulls.
+const releaseWorkflow = jobSource(pipeline, 'publish');
+const deployWorkflow = jobSource(pipeline, 'deploy');
 const compose = read('deploy/docker-compose.prod.yml');
 const deployScript = read('deploy/scripts/deploy.sh');
 const rollbackScript = existsSync(join(REPO_ROOT, 'deploy/scripts/rollback.sh'))

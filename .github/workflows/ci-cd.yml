@@ -1,0 +1,456 @@
+# ==============================================================================
+# HOSIFEST — CI/CD pipeline (single file)
+# ==============================================================================
+#
+# Merged from the former ci.yml, release.yml and deploy-production.yml. The job
+# graph is linear so a failure stops everything downstream:
+#
+#   quality ─┬─> publish ────> deploy
+#            └─> image-scan
+#
+#   quality      typecheck, migrations, seeds, unit + integration tests, builds
+#   secret-scan  gitleaks over full history
+#   image-scan   build both images locally, Trivy GATE (exit 1 on HIGH/CRITICAL)
+#   publish      build + push to GHCR, Trivy AUDIT (exit 0)
+#   deploy       SSH to VPS: preflight, pull, migrate, up -d, /ready gate
+#
+# Why image-scan AND publish both build: the pre-push scan is a BLOCKING gate
+# (20-ci-cd-pipeline.md section 2, "do not deploy production from a failing
+# pipeline"), while the post-push scan is the immutable audit record for a tag
+# that is already in the registry. Collapsing them into one build would drop the
+# audit record, so both are kept. The duplicate build is the price of keeping
+# every existing check intact.
+#
+# deploy is gated to non-PR events: a pull_request must never touch the VPS.
+# ==============================================================================
+
+name: CI/CD Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Immutable image tag to deploy, e.g. sha-<commit>"
+        required: false
+        type: string
+
+# One workflow, one concurrency group. PR runs are superseded by newer pushes
+# (fast feedback); main/release/dispatch runs serialize and are never cancelled,
+# so a queued release is not silently dropped mid-deploy
+# (20-ci-cd-pipeline.md section 10).
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  REGISTRY: ghcr.io
+  PNPM_VERSION: "9.15.0"
+  NODE_VERSION: "22"
+  # Operator keeps HOSIFEST alongside other stacks under /opt/stacks. The `secrets`
+  # context is NOT reliably available in workflow-level `env`, so a literal lives
+  # here rather than an override expression.
+  DEPLOY_PATH: /opt/stacks/hosifest
+
+jobs:
+  # ==========================================================================
+  # 1. quality — typecheck, migrations, seeds, tests, builds
+  # ==========================================================================
+  quality:
+    name: Typecheck, tests, build
+    runs-on: ubuntu-latest
+    # Real PostgreSQL so the integration suite exercises the real migrations
+    # and seeders. The suite self-skips when TEST_DATABASE_URL is unset, which
+    # is why the service + TEST_DATABASE_URL below must stay in sync.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hosifest_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          # Backend and frontend are independent pnpm projects with their own
+          # lockfiles; setup-node would otherwise look for one at the repo root.
+          cache-dependency-path: |
+            apps/backend/pnpm-lock.yaml
+            apps/frontend/pnpm-lock.yaml
+
+      - name: Install backend dependencies (frozen lockfile)
+        working-directory: apps/backend
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies (frozen lockfile)
+        working-directory: apps/frontend
+        run: pnpm install --frozen-lockfile
+
+      # Steps are intentionally separate so a failure names the exact stage
+      # that broke. A missing or failing script fails the job on purpose.
+      - name: Typecheck (backend)
+        working-directory: apps/backend
+        run: pnpm run typecheck
+
+      # DATABASE_URL, JWT_SECRET and APP_URL are all validated by the backend env
+      # schema, so every step that boots application code needs all three even
+      # though only the migrations/seeders touch the database.
+      - name: Apply migrations (integration schema)
+        working-directory: apps/backend
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
+          JWT_SECRET: test-secret-key-for-ci-testing
+          APP_URL: http://localhost:3001
+        run: |
+          pnpm build
+          node dist/scripts/migrate.js
+
+      - name: Apply seed data (including dev fixtures)
+        working-directory: apps/backend
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
+          JWT_SECRET: test-secret-key-for-ci-testing
+          APP_URL: http://localhost:3001
+        run: node dist/scripts/seed.js --include-dev
+
+      - name: Unit + integration tests (backend)
+        working-directory: apps/backend
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
+          JWT_SECRET: test-secret-key-for-ci-testing
+          APP_URL: http://localhost:3001
+        run: pnpm run test
+
+      - name: Typecheck (frontend)
+        working-directory: apps/frontend
+        run: pnpm run typecheck
+
+      - name: Build backend
+        working-directory: apps/backend
+        run: pnpm build
+
+      - name: Build frontend
+        working-directory: apps/frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: pnpm build
+
+  # ==========================================================================
+  # 2. secret-scan — committed secrets
+  # ==========================================================================
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ==========================================================================
+  # 3. image-scan — BLOCKING vulnerability gate (before anything is pushed)
+  # ==========================================================================
+  image-scan:
+    name: Docker build + image scan
+    runs-on: ubuntu-latest
+    needs: [quality]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          # Repo-root context: the image ships the root migrations/ directory.
+          context: .
+          file: apps/backend/Dockerfile
+          load: true
+          tags: hosifest-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/frontend
+          file: apps/frontend/Dockerfile
+          load: true
+          tags: hosifest-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          version: v0.69.3
+
+      # HIGH/CRITICAL findings fail the build. Trivy exits non-zero on findings
+      # when --exit-code is set.
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: hosifest-backend:ci
+          format: table
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          # The node:22-bookworm-slim base ships a global npm whose transitive
+          # deps carry HIGH CVEs. The app never invokes that npm at runtime
+          # (entrypoint is `node dist/server.js`), so exclude it from the scan
+          # while still scanning /app library deps.
+          skip-files: usr/local/lib/node_modules/**
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: hosifest-frontend:ci
+          format: table
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  # ==========================================================================
+  # 4. publish — build + push immutable SHA tags to GHCR, then audit
+  # ==========================================================================
+  publish:
+    name: Publish images to GHCR
+    runs-on: ubuntu-latest
+    needs: [image-scan]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Metadata is split per image: one shared step emitting both names risks
+      # the backend and frontend tags crossing over.
+      - name: Docker metadata (backend)
+        id: meta_backend
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend
+          tags: |
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Docker metadata (frontend)
+        id: meta_frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-frontend
+          tags: |
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Image names follow 20-ci-cd-pipeline.md section 3:
+      #   ghcr.io/<org>/hosifest-frontend:sha-<commit>
+      #   ghcr.io/<org>/hosifest-backend:sha-<commit>
+      # format=long keeps the full 40-hex SHA so the tag matches the
+      # ^sha-[0-9a-f]{40}$ pattern the deploy job enforces.
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          # Repo-root context: the image ships the root migrations/ directory.
+          context: .
+          file: apps/backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta_backend.outputs.tags }}
+          labels: ${{ steps.meta_backend.outputs.labels }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/frontend
+          file: apps/frontend/Dockerfile
+          push: true
+          tags: ${{ steps.meta_frontend.outputs.tags }}
+          labels: ${{ steps.meta_frontend.outputs.labels }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          version: v0.69.3
+
+      # Scan AFTER push: the tag is immutable and already recorded, so a
+      # vulnerability finding must not block the audit trail. The blocking gate
+      # is image-scan above, which runs before anything is pushed.
+      - name: Scan published images
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend:sha-${{ github.sha }}
+          format: table
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Summarise published images
+        if: always()
+        run: |
+          {
+            echo "### Images published"
+            echo ""
+            echo "- \`${{ env.REGISTRY }}/${{ github.repository }}/hosifest-backend:sha-${{ github.sha }}\`"
+            echo "- \`${{ env.REGISTRY }}/${{ github.repository }}/hosifest-frontend:sha-${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ==========================================================================
+  # 5. deploy — VPS update over SSH
+  # ==========================================================================
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: [publish]
+    if: github.event_name != 'pull_request'
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout (for deploy scripts only)
+        uses: actions/checkout@v4
+
+      # Password auth (operator choice): sshpass -e reads the password from the
+      # SSHPASS environment variable, so it never appears in a command line or
+      # in the process list. Do not switch to `sshpass -p`.
+      - name: Install sshpass
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Configure SSH (password auth)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_PASSWORD: ${{ secrets.VPS_PASSWORD }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          {
+            printf 'Host hosifest-vps\n'
+            printf '  HostName %s\n' "$VPS_HOST"
+            printf '  User %s\n' "$VPS_USER"
+            printf '  Port %s\n' "${VPS_PORT:-22}"
+            printf '  StrictHostKeyChecking accept-new\n'
+            printf '  UserKnownHostsFile ~/.ssh/known_hosts\n'
+          } >> "$HOME/.ssh/config"
+          chmod 600 "$HOME/.ssh/config"
+          # Multiline heredoc form: survives newlines and quotes in the secret.
+          {
+            printf 'SSHPASS<<HOSIFEST_SSHPASS_EOF\n'
+            printf '%s\n' "$VPS_PASSWORD"
+            printf 'HOSIFEST_SSHPASS_EOF\n'
+          } >> "$GITHUB_ENV"
+
+      - name: Verify SSH connectivity
+        run: sshpass -e ssh hosifest-vps 'echo SSH ok'
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+        run: |
+          TAG="${INPUT_TAG:-sha-${GITHUB_SHA}}"
+          if ! [[ "$TAG" =~ ^sha-[0-9a-f]{40}$ ]]; then
+            echo "::error::image tag must be sha-<40-hex-commit>, got: $TAG"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Deploying $REGISTRY/${{ github.repository }} at $TAG"
+
+      # The VPS needs the deploy scripts on disk. The repository is NOT required
+      # on the VPS for normal operation — images are pulled from GHCR.
+      - name: Sync deploy scripts to VPS
+        run: |
+          sshpass -e ssh hosifest-vps "mkdir -p '$DEPLOY_PATH/deploy/scripts'"
+          sshpass -e scp -r deploy/scripts/. "hosifest-vps:$DEPLOY_PATH/deploy/scripts/"
+          sshpass -e scp deploy/docker-compose.prod.yml "hosifest-vps:$DEPLOY_PATH/deploy/docker-compose.prod.yml"
+
+      - name: Verify host preconditions (read-only)
+        run: |
+          sshpass -e ssh hosifest-vps \
+            "chmod +x '$DEPLOY_PATH'/deploy/scripts/*.sh && '$DEPLOY_PATH'/deploy/scripts/verify-host.sh"
+
+      # Runs entirely on the VPS: preflight -> pull -> migrate -> up -d -> health gate.
+      # deploy.sh never prints secret values; it only echoes variable NAMES.
+      - name: Deploy (pull, migrate, up -d, health gate)
+        env:
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          IMAGE_REGISTRY: ${{ env.REGISTRY }}/${{ github.repository }}
+        run: |
+          sshpass -e ssh hosifest-vps \
+            "cd '$DEPLOY_PATH' && IMAGE_TAG='$IMAGE_TAG' IMAGE_REGISTRY='$IMAGE_REGISTRY' \
+             '$DEPLOY_PATH'/deploy/scripts/deploy.sh"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Production deployment"
+            echo ""
+            echo "- commit: \`${{ github.sha }}\`"
+            echo "- image tag: \`${{ steps.tag.outputs.tag || 'n/a' }}\`"
+            echo "- registry: \`${{ env.REGISTRY }}/${{ github.repository }}\`"
+            echo "- result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
