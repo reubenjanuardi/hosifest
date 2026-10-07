@@ -59,8 +59,13 @@ compose pull
 
 # --- 3. migrations ---------------------------------------------------------
 # Runs on the backend image, so the VPS needs no application checkout.
+# --no-deps must NOT be used here: postgres would never start, so Docker's
+# internal DNS has no record for the `postgres` service and migrate fails with
+# `getaddrinfo EAI_AGAIN postgres`. The backend service declares
+# `depends_on: postgres: condition: service_healthy`, so compose starts postgres
+# and waits for it to pass pg_isready before running migrate.
 log "running migrations (migrations/*.sql, ascending filename order)"
-compose run --rm --no-deps backend npm run migrate
+compose run --rm backend npm run migrate
 
 # --- 4. up -----------------------------------------------------------------
 log "recreating containers"
