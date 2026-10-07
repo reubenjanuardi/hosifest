@@ -67,6 +67,23 @@ compose pull
 log "running migrations (migrations/*.sql, ascending filename order)"
 compose run --rm backend npm run migrate
 
+# --- 3b. seed ---------------------------------------------------------------
+# Migrations create schema only, so the database has no rows: no event, no
+# ticket offers, no catalogs. The storefront would be empty.
+#
+# This runs the seeders that ship INSIDE the backend image
+# (apps/backend/Dockerfile copies seeders/ into the runtime stage), so no
+# repository checkout is required on the VPS — the same property that lets
+# migrate work.
+#
+# Every seeder is idempotent (ON CONFLICT DO NOTHING), so this is safe on
+# every deploy: already-loaded configuration rows are left untouched, which
+# matters because admins edit these through the admin API and a seeder must
+# never overwrite a live change. 002_dev_users.sql is skipped unless
+# --include-dev is passed, so production never receives seeded accounts.
+log "applying seed data (seeders/*.sql, idempotent)"
+compose run --rm backend npm run seed
+
 # --- 4. up -----------------------------------------------------------------
 log "recreating containers"
 compose up -d --remove-orphans

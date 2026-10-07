@@ -6,6 +6,15 @@
 -- a coherent timeline. Phase dates and prices are CONFIGURATION: admin must
 -- review and set the real dates before any production deploy. Nothing here is
 -- a compile-time constant in the backend; the backend always reads these rows.
+--
+-- The windows are staggered so exactly one phase is open at any time, with
+-- EARLY_BIRD open now and NORMAL running up to the event day:
+--   EARLY_BIRD  2026-10-01 .. 2026-10-31
+--   PRESALE     2026-11-01 .. 2026-11-13
+--   NORMAL      2026-11-01 .. 2026-11-14 07:59 (opens alongside PRESALE)
+-- Change them through the admin API (PUT /admin/config/...) or this file; the
+-- seeders are ON CONFLICT DO NOTHING, so a row already loaded is NOT updated
+-- by a later deploy. Admin edits are therefore never overwritten by a deploy.
 
 -- ------------------------------------------------------------------- event
 INSERT INTO events (
@@ -33,12 +42,12 @@ INSERT INTO sales_phases (
   ('44444444-4444-4444-8444-444444444411',
    '44444444-4444-4444-8444-444444444401',
    'EARLY_BIRD', 'Early Bird',
-   '2026-09-01T00:00:00+07', '2026-09-30T23:59:59+07',
+   '2026-10-01T00:00:00+07', '2026-10-31T23:59:59+07',
    'RESTRICTED', 'ACTIVE', 1),
   ('44444444-4444-4444-8444-444444444412',
    '44444444-4444-4444-8444-444444444401',
    'PRESALE', 'Presale',
-   '2026-10-01T00:00:00+07', '2026-10-31T23:59:59+07',
+   '2026-11-01T00:00:00+07', '2026-11-13T23:59:59+07',
    'PUBLIC', 'SCHEDULED', 2),
   ('44444444-4444-4444-8444-444444444413',
    '44444444-4444-4444-8444-444444444401',
