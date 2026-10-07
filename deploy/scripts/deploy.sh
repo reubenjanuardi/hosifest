@@ -86,14 +86,31 @@ done
 
 [ -z "${unhealthy:-}" ] || fail "containers did not become healthy: $unhealthy"
 
-log "probing /ready"
-READY_URL="${HEALTHCHECK_SCHEME:-https}://${HEALTHCHECK_HOST:-127.0.0.1}:${HEALTHCHECK_PORT:-8080}${HEALTHCHECK_PATH:-/ready}"
+log "probing /ready inside the compose network"
+# The probe runs from the backend container, not from the VPS host.
+#
+# It cannot be a host-side probe: no service in docker-compose.prod.yml
+# publishes a `ports:` block (backend and postgres are deliberately never
+# exposed, per AGENTS.md section 1), and the frontend's nginx config only
+# serves `location = /healthz` — there is no `location = /ready`. So a
+# host-side curl to 127.0.0.1:8080/ready has nothing listening and can
+# never succeed, no matter how healthy the containers report.
+#
+# `curl -fsS` is the correct assertion: /ready answers 503 while the
+# database is still coming up and 200 only once it is reachable, so this
+# waits for real readiness rather than merely for a listening socket.
 attempt=0
-until curl -fsS --max-time 10 "$READY_URL" >/dev/null 2>&1; do
+until compose exec -T backend curl -fsS --max-time 5 \
+        "http://127.0.0.1:${BACKEND_PORT:-3000}${HEALTHCHECK_PATH:-/ready}" \
+        >/dev/null 2>&1; do
   attempt=$(( attempt + 1 ))
-  [ "$attempt" -lt 30 ] || fail "/ready gate failed at $READY_URL"
+  # Log every attempt. The old host-side probe swallowed curl's stderr, so a
+  # gate that could never succeed burned five minutes of silent retries.
+  log "  /ready not ok (attempt $attempt/30), retrying in 10s"
+  [ "$attempt" -lt 30 ] || fail "/ready gate failed (backend never reported ready)"
   sleep 10
 done
+log "/ready ok"
 
 # --- 6. record -------------------------------------------------------------
 if [ -f "$STATE_FILE" ]; then

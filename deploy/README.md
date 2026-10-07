@@ -86,7 +86,7 @@ Everything in this directory is authored against
   ```
 
   The tunnel's public origin is what the operator puts into `APP_URL` /
-  `PUBLIC_API_URL` in `deploy/.env`, and what `HEALTHCHECK_HOST` points at.
+  `PUBLIC_API_URL` in `deploy/.env`.
 
 - **Isolation.** No service in this stack declares a dependency on, references
   a name of, or otherwise touches unrelated containers on `hosiana_network`.
@@ -224,9 +224,7 @@ chmod 600 deploy/.env
 | `POSTGRES_PASSWORD` | **yes** | Least-privilege role password. |
 | `HOSIANA_NETWORK_NAME` | no | Default `hosiana_network`. Must already exist. |
 | `TZ` | no | Default `Asia/Jakarta`. |
-| `HEALTHCHECK_SCHEME` | no | `https` in production. |
-| `HEALTHCHECK_HOST` | no | Public tunnel hostname; gates on `/ready`. |
-| `HEALTHCHECK_PORT` | no | Default `8080`. |
+| `BACKEND_PORT` | no | Default `3000`; the port the `/ready` probe targets. |
 | `HEALTHCHECK_PATH` | no | Default `/ready`. |
 
 `deploy/.env` is covered by the repository `.gitignore` (`.env`, `.env.*` with
@@ -310,7 +308,9 @@ IMAGE_TAG=sha-<commit> deploy/scripts/deploy.sh
 3. **Migrate** — `run --rm backend npm run migrate`.
 4. **Up** — `up -d --remove-orphans`.
 5. **Health gate** — wait for every service to report `healthy`, then poll
-   `GET $HEALTHCHECK_SCHEME://$HEALTHCHECK_HOST:$HEALTHCHECK_PORT/ready`.
+   `/ready` from inside the backend container, over the internal compose
+   network. No published port, public hostname or DNS entry is involved, so
+   the gate works before the Cloudflare Tunnel is attached.
 6. **Record** — write `IMAGE_TAG` to `deploy/.deployed-image-tag`, keeping the
    previous value as `.previous` (the rollback pointer).
 
