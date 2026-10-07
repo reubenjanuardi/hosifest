@@ -8,7 +8,7 @@
 # backup").
 #
 # Usage:
-#   deploy/scripts/restore.sh /opt/hosifest/deploy/backups/hosifest-hosifest-20260101T020000Z.dump
+#   deploy/scripts/restore.sh /opt/stacks/hosifest/deploy/backups/hosifest-hosifest-20260101T020000Z.dump
 #   CONFIRM_RESTORE=YES deploy/scripts/restore.sh <dump>
 #   TARGET_DB=hosifest_restore_test deploy/scripts/restore.sh <dump>   # dry-ish rehearsal
 #

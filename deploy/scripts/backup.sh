@@ -11,7 +11,7 @@
 #   RETENTION_DAYS=30 deploy/scripts/backup.sh
 #
 # Scheduling example (root crontab), daily 02:15 local time:
-#   15 2 * * * /opt/hosifest/deploy/scripts/backup.sh >> /var/log/hosifest-backup.log 2>&1
+#   15 2 * * * /opt/stacks/hosifest/deploy/scripts/backup.sh >> /var/log/hosifest-backup.log 2>&1
 #
 # Exit codes: 0 success, non-zero failure (alert on non-zero).
 # ---------------------------------------------------------------------------

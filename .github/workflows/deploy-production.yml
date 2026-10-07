@@ -27,7 +27,10 @@ defaults:
 
 env:
   REGISTRY: ghcr.io
-  DEPLOY_PATH: /opt/hosifest
+  # Operator keeps HOSIFEST alongside other stacks under /opt/stacks. The `secrets`
+  # context is NOT reliably available in workflow-level `env`, so a literal lives
+  # here and a step below resolves the optional override from the environment.
+  DEPLOY_PATH: /opt/stacks/hosifest
 
 jobs:
   deploy:

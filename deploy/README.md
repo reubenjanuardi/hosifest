@@ -189,7 +189,7 @@ merge to `main` cannot deploy without a human.
 Copy the template on the VPS and fill it in:
 
 ```bash
-cd /opt/hosifest
+cd /opt/stacks/hosifest
 cp deploy/.env.example deploy/.env
 chmod 600 deploy/.env
 ```
@@ -254,8 +254,8 @@ safe to re-run (idempotent where appropriate). Migrations run **before**
 3. Create the deploy directory and place the repo's `deploy/` there:
 
    ```bash
-   sudo mkdir -p /opt/hosifest/deploy
-   # copy deploy/ from the repository to /opt/hosifest/deploy/
+   sudo mkdir -p /opt/stacks/hosifest/deploy
+   # copy deploy/ from the repository to /opt/stacks/hosifest/deploy/
    ```
 4. Create `deploy/.env` from `deploy/.env.example`; `chmod 600`.
 5. Add the deploy SSH public key to `~<VPS_USER>/.ssh/authorized_keys`.
@@ -277,7 +277,7 @@ deploy-production.yml
 
 ```bash
 # On the VPS
-cd /opt/hosifest
+cd /opt/stacks/hosifest
 IMAGE_TAG=sha-<commit> deploy/scripts/deploy.sh
 ```
 
@@ -344,7 +344,7 @@ require rolling back the schema.
 ### 9.1 Application rollback
 
 ```bash
-cd /opt/hosifest
+cd /opt/stacks/hosifest
 
 # Roll back to the recorded previous SHA
 deploy/scripts/rollback.sh
@@ -393,7 +393,7 @@ container — no host port, no network exposure.
 ### 10.1 Backup
 
 ```bash
-cd /opt/hosifest
+cd /opt/stacks/hosifest
 deploy/scripts/backup.sh
 ```
 
@@ -412,7 +412,7 @@ BACKUP_DIR=/mnt/backups/hosifest RETENTION_DAYS=30 deploy/scripts/backup.sh
 
 ```cron
 # /etc/cron.d/hosifest-backup  — daily 02:15, log to /var/log/hosifest-backup.log
-15 2 * * * /opt/hosifest/deploy/scripts/backup.sh >> /var/log/hosifest-backup.log 2>&1
+15 2 * * * /opt/stacks/hosifest/deploy/scripts/backup.sh >> /var/log/hosifest-backup.log 2>&1
 ```
 
 Alert on any non-zero exit code. Off-host replication is a separate operator
@@ -421,7 +421,7 @@ concern; a backup on the same VPS does not survive VPS loss.
 ### 10.3 Restore
 
 ```bash
-cd /opt/hosifest
+cd /opt/stacks/hosifest
 
 # 1. Rehearse into a scratch database first
 TARGET_DB=hosifest_restore_test CONFIRM_RESTORE=YES \
