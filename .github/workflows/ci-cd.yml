@@ -227,7 +227,7 @@ jobs:
       - name: Apply migrations (integration schema)
         working-directory: apps/backend
         env:
-          DATABASE_URL: postgres://postgres:***@localhost:5432/hosifest_test
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
           JWT_SECRET: test-secret-key-for-ci-testing
           APP_URL: http://localhost:3001
         run: |
@@ -236,7 +236,7 @@ jobs:
       - name: Apply seed data (including dev fixtures)
         working-directory: apps/backend
         env:
-          DATABASE_URL: postgres://postgres:***@localhost:5432/hosifest_test
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/hosifest_test
           JWT_SECRET: test-secret-key-for-ci-testing
           APP_URL: http://localhost:3001
         run: node dist/scripts/seed.js --include-dev
