@@ -33,8 +33,8 @@ RUN pnpm build
 FROM nginx:1.29-alpine AS runner
 
 # Pull latest patched Alpine libs (c-ares, curl, openssl, expat, ...) —
-# base image tags lag behind security releases.
-RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
+  # base image tags lag behind security releases.
+  RUN apk update && apk upgrade --no-cache && apk add tiff=4.7.2-r0 && rm -rf /var/cache/apk/*
 
 # Node runtime for the Next.js standalone server. Pinned to the same major as
 # the build stages so the standalone output's ABI matches.
