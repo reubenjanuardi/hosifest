@@ -6,7 +6,7 @@ import { loadEnv, type Env } from './config/env.js';
 import { AppError } from './core/errors.js';
 import { errorFromUnknown } from './core/response.js';
 import { buildContainer, type Container } from './modules/container.js';
-import { authPlugin } from './modules/identity/auth.plugin.js';
+import { registerAdminAuthHook } from './modules/identity/auth.plugin.js';
 import { identityRoutes } from './modules/identity/identity.routes.js';
 import { publicEventRoutes } from './modules/event/public.routes.js';
 import { publicOrderRoutes } from './modules/order/order.routes.js';
@@ -70,8 +70,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     allowList: (request) => request.url === '/health' || request.url === '/ready',
   });
 
-  // Authentication + RBAC gate for /admin.
-  await app.register(authPlugin, { identity: container.identity });
+  // Authentication + RBAC gate for /admin (registered DIRECTLY on root,
+  // NOT via app.register(), so its global onRequest hook covers the
+  // /api/v1/admin routes registered later under the API_PREFIX context).
+  registerAdminAuthHook(app, { identity: container.identity });
 
   // Multipart upload for payment-proof files. Limits duplicate the env
   // values so oversized bodies are rejected before buffering.
@@ -103,6 +105,43 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   await app.register(
     async (api) => {
+      // Error envelope + 404 MUST be set on the `api` scope itself: handlers
+      // registered on the root AFTER routes do not cover errors thrown inside
+      // them (observed: raw Fastify 500 JSON for a ZodError in /admin/login).
+      api.setNotFoundHandler((request, reply) => {
+        return reply.status(404).send({
+          data: null,
+          meta: {},
+          error: { code: 'NOT_FOUND', message: 'Resource not found.', details: { path: request.url } },
+        });
+      });
+
+      api.setErrorHandler((error, request, reply) => {
+        // Rate limit errors carry their own status.
+        if ((error as { statusCode?: number }).statusCode === 429) {
+          return reply.status(429).send({
+            data: null,
+            meta: {},
+            error: { code: 'RATE_LIMITED', message: 'Too many requests.', details: {} },
+          });
+        }
+
+        const { statusCode, body } = errorFromUnknown(error);
+        const logPayload = {
+          requestId: request.id,
+          method: request.method,
+          url: request.url,
+          code: body.error.code,
+          statusCode,
+          // Never log secrets or raw QR tokens.
+          message: error instanceof Error ? error.message : String(error),
+        };
+        if (statusCode >= 500) api.log.error(logPayload, 'unhandled error');
+        else api.log.warn(logPayload, 'request rejected');
+
+        return reply.status(statusCode).send(body);
+      });
+
       await api.register(publicEventRoutes(container));
       await api.register(publicOrderRoutes(container));
       await api.register(ticketRoutes(container));
@@ -115,40 +154,6 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
     { prefix: API_PREFIX },
   );
-
-  app.setNotFoundHandler((request, reply) => {
-    return reply.status(404).send({
-      data: null,
-      meta: {},
-      error: { code: 'NOT_FOUND', message: 'Resource not found.', details: { path: request.url } },
-    });
-  });
-
-  app.setErrorHandler((error, request, reply) => {
-    // Rate limit errors carry their own status.
-    if ((error as { statusCode?: number }).statusCode === 429) {
-      return reply.status(429).send({
-        data: null,
-        meta: {},
-        error: { code: 'RATE_LIMITED', message: 'Too many requests.', details: {} },
-      });
-    }
-
-    const { statusCode, body } = errorFromUnknown(error);
-    const logPayload = {
-      requestId: request.id,
-      method: request.method,
-      url: request.url,
-      code: body.error.code,
-      statusCode,
-      // Never log secrets or raw QR tokens.
-      message: error instanceof Error ? error.message : String(error),
-    };
-    if (statusCode >= 500) app.log.error(logPayload, 'unhandled error');
-    else app.log.warn(logPayload, 'request rejected');
-
-    return reply.status(statusCode).send(body);
-  });
 
   app.addHook('onClose', async () => {
     await container.db.close();

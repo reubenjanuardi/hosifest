@@ -1,72 +1,92 @@
 -- 001_roles_permissions.sql
--- Seed roles and permissions from 02-actors-roles-use-cases.md.
+-- Seed roles and permissions aligned with apps/backend/src/modules/identity/rbac.ts
 -- All inserts are idempotent (ON CONFLICT DO NOTHING).
 --
 -- Deterministic UUIDs are used so later seed files can reference these rows.
 
 INSERT INTO roles (id, code, name, description) VALUES
-  ('11111111-1111-4111-8111-111111111101', 'SUPER_ADMIN', 'Super Admin',
-   'All administrative functions including user/role management and audit log access.'),
-  ('11111111-1111-4111-8111-111111111102', 'ADMIN', 'Sales/Admin',
-   'Configure ticket phases, prices, quotas and promotions; view orders and ticket sales.'),
-  ('11111111-1111-4111-8111-111111111103', 'FINANCE', 'Finance/Admin',
-   'View and review payment proofs; view financial reports.'),
-  ('11111111-1111-4111-8111-111111111104', 'CHECKIN', 'Check-in Staff',
-   'Scan QR for ENTRY and EXIT; search ticket codes.'),
-  ('11111111-1111-4111-8111-111111111105', 'SOUVENIR', 'Souvenir/Admin',
-   'Manage souvenir option groups/options and view per-ticket customization.')
+  ('11111111-1111-4111-8111-111111111101', 'ADMIN', 'Administrator',
+   'Full administrative access: configure phases, prices, quotas, promotions; manage users; review payments; view all reports and audit logs.'),
+  ('11111111-1111-4111-8111-111111111102', 'FINANCE', 'Finance/Admin',
+   'View and review payment proofs; view financial reports and orders.'),
+  ('11111111-1111-4111-8111-111111111103', 'ATTENDANCE', 'Check-in Staff',
+   'Scan QR for ENTRY and EXIT; search ticket codes; view attendance reports.')
 ON CONFLICT (code) DO NOTHING;
 
+-- Legacy role codes from the previous seed. rbac.ts never accepted them, so any
+-- account holding only one of these could not log in. They are remapped to the
+-- role the backend actually recognises, then deleted (user_roles and
+-- role_permissions cascade).
+INSERT INTO user_roles (user_id, role_id)
+SELECT ur.user_id, r.id
+  FROM user_roles ur
+  JOIN roles legacy ON legacy.id = ur.role_id
+  JOIN roles r      ON r.code = 'ADMIN'
+ WHERE legacy.code = 'SUPER_ADMIN'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO user_roles (user_id, role_id)
+SELECT ur.user_id, r.id
+  FROM user_roles ur
+  JOIN roles legacy ON legacy.id = ur.role_id
+  JOIN roles r      ON r.code = 'ATTENDANCE'
+ WHERE legacy.code = 'CHECKIN'
+ON CONFLICT DO NOTHING;
+
+-- SOUVENIR has no counterpart in rbac.ts. Souvenir catalog administration is
+-- only reachable through config:write, which rbac.ts grants to ADMIN, so the
+-- mapping is ADMIN rather than silently downgrading the operator.
+INSERT INTO user_roles (user_id, role_id)
+SELECT ur.user_id, r.id
+  FROM user_roles ur
+  JOIN roles legacy ON legacy.id = ur.role_id
+  JOIN roles r      ON r.code = 'ADMIN'
+ WHERE legacy.code = 'SOUVENIR'
+ON CONFLICT DO NOTHING;
+
+DELETE FROM roles WHERE code IN ('SUPER_ADMIN', 'CHECKIN', 'SOUVENIR');
+
+-- Permission catalogue. Codes mirror rbac.ts PERMISSIONS exactly; the role ->
+-- permission grants below record the same shape as ROLE_PERMISSIONS so the
+-- database stays readable next to the code that enforces access.
 INSERT INTO permissions (id, code, description) VALUES
-  ('22222222-2222-4222-8222-222222222201', 'ticket:write',      'Create or modify ticket phases, offers and allocations.'),
-  ('22222222-2222-4222-8222-222222222202', 'catalog:write',     'Manage beverage, souvenir and product catalogs.'),
-  ('22222222-2222-4222-8222-222222222203', 'promotion:write',   'Manage discount codes and usage limits.'),
-  ('22222222-2222-4222-8222-222222222204', 'report:read',       'Read reporting endpoints.'),
-  ('22222222-2222-4222-8222-222222222205', 'payment:read',      'View payment records and proofs.'),
-  ('22222222-2222-4222-8222-222222222206', 'payment:review',    'Approve or reject payment proofs.'),
-  ('22222222-2222-4222-8222-222222222207', 'attendance:read',   'View ticket and attendance state.'),
-  ('22222222-2222-4222-8222-222222222208', 'attendance:write',  'Record ENTRY and EXIT scans.'),
-  ('22222222-2222-4222-8222-222222222209', 'souvenir:read',     'View souvenir customization data.'),
-  ('22222222-2222-4222-8222-222222222210', 'souvenir:write',    'Manage souvenir options and fulfillment status.'),
-  ('22222222-2222-4222-8222-222222222211', 'user:manage',       'Manage users and role assignments.'),
-  ('22222222-2222-4222-8222-222222222212', 'audit:read',        'Read audit logs.'),
-  ('22222222-2222-4222-8222-222222222213', 'order:read',        'View orders.'),
-  ('22222222-2222-4222-8222-222222222214', 'order:write',       'Administrative order operations.')
+  ('22222222-2222-4222-8222-222222222201', 'config:read',    'Read administrative configuration.'),
+  ('22222222-2222-4222-8222-222222222202', 'config:write',   'Create or modify administrative configuration.'),
+  ('22222222-2222-4222-8222-222222222203', 'order:read',     'View orders.'),
+  ('22222222-2222-4222-8222-222222222204', 'order:write',    'Administrative order operations.'),
+  ('22222222-2222-4222-8222-222222222205', 'payment:review', 'Approve or reject payment proofs.'),
+  ('22222222-2222-4222-8222-222222222206', 'ticket:read',    'Look up tickets and QR codes.'),
+  ('22222222-2222-4222-8222-222222222207', 'attendance:scan','Record ENTRY and EXIT scans.'),
+  ('22222222-2222-4222-8222-222222222208', 'report:read',    'Read reporting endpoints.'),
+  ('22222222-2222-4222-8222-222222222209', 'audit:read',     'Read audit logs.')
 ON CONFLICT (code) DO NOTHING;
 
--- SUPER_ADMIN: wildcard is enforced by the backend, not by rows here.
--- Everything explicit is granted so the role is self-describing in the DB.
+-- Permission codes from the previous seed that rbac.ts never defines. They are
+-- removed so the catalogue cannot drift into implying grants that do not exist.
+DELETE FROM permissions
+ WHERE code NOT IN (
+   'config:read', 'config:write', 'order:read', 'order:write', 'payment:review',
+   'ticket:read', 'attendance:scan', 'report:read', 'audit:read'
+ );
+
+-- ADMIN is a superset: rbac.ts grants it every permission.
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id
   FROM roles r
  CROSS JOIN permissions p
- WHERE r.code = 'SUPER_ADMIN'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO role_permissions (role_id, permission_id)
-SELECT r.id, p.id
-  FROM roles r
-  JOIN permissions p ON p.code IN ('ticket:write','catalog:write','promotion:write','report:read','order:read','order:write','audit:read')
  WHERE r.code = 'ADMIN'
 ON CONFLICT DO NOTHING;
 
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id
   FROM roles r
-  JOIN permissions p ON p.code IN ('payment:read','payment:review','report:read','order:read')
+  JOIN permissions p ON p.code IN ('config:read','order:read','order:write','payment:review','ticket:read','report:read')
  WHERE r.code = 'FINANCE'
 ON CONFLICT DO NOTHING;
 
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id
   FROM roles r
-  JOIN permissions p ON p.code IN ('attendance:read','attendance:write')
- WHERE r.code = 'CHECKIN'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO role_permissions (role_id, permission_id)
-SELECT r.id, p.id
-  FROM roles r
-  JOIN permissions p ON p.code IN ('souvenir:read','souvenir:write','report:read')
- WHERE r.code = 'SOUVENIR'
+  JOIN permissions p ON p.code IN ('ticket:read','attendance:scan','report:read')
+ WHERE r.code = 'ATTENDANCE'
 ON CONFLICT DO NOTHING;
