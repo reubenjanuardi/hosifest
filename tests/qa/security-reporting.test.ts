@@ -308,9 +308,9 @@ describe('AC-OPS-01..05 operational reports', () => {
     );
   });
 
-  it('AC-OPS-05 beverage demand can be aggregated', async () => {
+  it('AC-OPS-05 beverage demand can be aggregated from paid tickets only', async () => {
     const souvenir = await defaultSouvenir(container);
-    await container.orders.createOrder({
+    const paid = await container.orders.createOrder({
       eventSlug: SEED.eventSlug,
       customer: guest(),
       items: [
@@ -324,14 +324,36 @@ describe('AC-OPS-01..05 operational reports', () => {
         },
       ],
     });
+    await container.orderQueries.submitPaymentProof(paid.order.order_number, {
+      method: 'QRIS',
+      amount: paid.order.total_amount,
+      proofFileKey: 'qa/2026/proof.png',
+    });
+    await container.payments.approvePayment(paid.order.id, actor(SEED.financeUser));
+
+    const unpaidOnlyBeverage = await container.config.create(
+      RESOURCES.beverageOptions,
+      { code: 'QA_UNPAID_ONLY', name: 'QA Unpaid Only', active: true, display_order: 99 },
+      adminContext(),
+    );
+    await container.orders.createOrder({
+      eventSlug: SEED.eventSlug,
+      customer: guest(),
+      items: [
+        {
+          ticketOfferId: SEED.offerPresale,
+          quantity: 1,
+          tickets: [{ beverageOptionId: unpaidOnlyBeverage.id, souvenirSelections: souvenir }],
+        },
+      ],
+    });
+
     const report = (await container.reporting.beverages(SEED.eventSlug)) as any;
     assert.ok(Array.isArray(report), 'AC-OPS-05: a beverage demand report must exist');
     const text = JSON.stringify(report);
-    assert.ok(
-      text.includes('Es Kopi Susu') || text.includes('Milk Tea'),
-      'AC-OPS-05: beverage demand is aggregated from paid tickets only, so an ' +
-        'unpaid order must not appear in the report',
-    );
+    assert.ok(text.includes('Es Kopi Susu'), 'AC-OPS-05: paid Kopi Susu choice must appear');
+    assert.ok(text.includes('Milk Tea'), 'AC-OPS-05: paid Milk Tea choice must appear');
+    assert.ok(!text.includes('QA Unpaid Only'), 'AC-OPS-05: unpaid-only beverage choice must not appear');
   });
 });
 

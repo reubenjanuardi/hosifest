@@ -13,20 +13,21 @@ export class ReportingService {
   constructor(private readonly db: Database) {}
 
   /** AC-OPS-01: sold vs configured quota per offer (from v_offer_capacity). */
-  async sales(eventSlug?: string) {
-    const { rows } = await this.db.query(
-      `SELECT c.*
-         FROM v_offer_capacity c
-        WHERE ($1::text IS NULL OR EXISTS (
-                SELECT 1
-                  FROM sales_phases sp
-                  JOIN events e ON e.id = sp.event_id
-                 WHERE sp.id = c.ticket_offer_id AND e.slug = $1))
-        ORDER BY c.ticket_offer_code`,
-      [eventSlug ?? null],
-    );
-    return rows;
-  }
+    async sales(eventSlug?: string) {
+      const { rows } = await this.db.query(
+        `SELECT c.*
+           FROM v_offer_capacity c
+          WHERE ($1::text IS NULL OR EXISTS (
+                  SELECT 1
+                    FROM ticket_offers o
+                    JOIN sales_phases sp ON sp.id = o.sales_phase_id
+                    JOIN events e ON e.id = sp.event_id
+                   WHERE o.id = c.ticket_offer_id AND e.slug = $1))
+          ORDER BY c.ticket_offer_code`,
+        [eventSlug ?? null],
+      );
+      return rows;
+    }
 
   /** Per-offer allocation capacity, including the eligibility split. */
   async allocations(eventSlug?: string) {
@@ -139,7 +140,15 @@ export class ReportingService {
     return rows;
   }
 
-  /** AC-OPS-05: Presale beverage demand from frozen benefit snapshots. */
+  /**
+   * AC-OPS-05: Presale beverage demand aggregated ONLY from PAID orders.
+   *
+   * Reads the frozen `beverage` snapshot on the issued ticket's benefit row
+   * (written at payment time by TicketService) and joins tickets -> order_items
+   * -> orders to require `orders.status = 'PAID'`. An unpaid, cancelled or
+   * expired order therefore contributes nothing. The snapshot, not the live
+   * catalog, is read so an admin rename cannot rewrite historical reporting.
+   */
   async beverages(eventSlug?: string) {
     const { rows } = await this.db.query(
       `SELECT bs.snapshot->'beverage'->>'name' AS beverage_name,
@@ -151,6 +160,8 @@ export class ReportingService {
          JOIN orders ord ON ord.id = oi.order_id
         WHERE ord.status = 'PAID'
           AND bs.benefit_type = 'BEVERAGE'
+          AND bs.beverage_option_id IS NOT NULL
+          AND bs.snapshot->'beverage' IS NOT NULL
           AND ($1::text IS NULL OR EXISTS (
                 SELECT 1 FROM events e WHERE e.id = ord.event_id AND e.slug = $1))
         GROUP BY bs.snapshot->'beverage'->>'name', bs.snapshot->'beverage'->>'code'
