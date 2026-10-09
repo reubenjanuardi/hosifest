@@ -238,9 +238,17 @@ export function describeAttendanceStatus(status: string): StatusDescriptor & { i
         icon: '!',
       };
     case 'INVALID_TICKET':
+    case 'TICKET_NOT_VALID':
       return {
         label: 'INVALID TICKET',
         description: 'Rejected. Attendance state was not changed.',
+        tone: 'danger',
+        icon: '×',
+      };
+    case 'CONGREGATION_REQUIRED':
+      return {
+        label: 'CONGREGATION REQUIRED',
+        description: 'This ticket is not bound to an eligible congregation. Attendance was not recorded.',
         tone: 'danger',
         icon: '×',
       };

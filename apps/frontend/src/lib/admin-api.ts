@@ -200,6 +200,21 @@ export function getSouvenirReport(eventSlug?: string) {
   return adminRequest<SalesReport>(`/admin/reports/souvenir${query}`);
 }
 
+export function getTicketsReport(eventSlug?: string) {
+  const query = eventSlug ? `?eventSlug=${encodeURIComponent(eventSlug)}` : '';
+  return adminRequest<SalesReport>(`/admin/reports/tickets${query}`);
+}
+
+export function getBeverageReport(eventSlug?: string) {
+  const query = eventSlug ? `?eventSlug=${encodeURIComponent(eventSlug)}` : '';
+  return adminRequest<SalesReport>(`/admin/reports/beverage${query}`);
+}
+
+export function getDiscountsReport(eventSlug?: string) {
+  const query = eventSlug ? `?eventSlug=${encodeURIComponent(eventSlug)}` : '';
+  return adminRequest<SalesReport>(`/admin/reports/discounts${query}`);
+}
+
 /* ------------------------------------------------------------------ */
 /* Configuration — read and write through the admin resource endpoints */
 /* ------------------------------------------------------------------ */
@@ -244,13 +259,323 @@ export function updateConfigResource<T = ConfigResource>(
 /* Orders, payments, attendance, audit                                 */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Payment review — finance verifies bank-transfer / QRIS proofs     */
+/* ------------------------------------------------------------------ */
+
+/** One row of the review queue (GET /admin/orders). */
+export interface ReviewQueueRow {
+  id: string;
+  order_number: string;
+  status: 'WAITING_PAYMENT' | 'PAYMENT_REVIEW';
+  total_amount: number;
+  subtotal_amount: number;
+  discount_amount: number;
+  expires_at: string | null;
+  created_at: string;
+  customer_name: string;
+  customer_email: string | null;
+  customer_phone: string;
+  payment_id: string | null;
+  payment_method: string | null;
+  payment_amount: number | null;
+  payment_status: string | null;
+  proof_file_key: string | null;
+  external_reference: string | null;
+  submitted_at: string | null;
+}
+
+export interface ApprovePaymentResult {
+  orderId: string;
+  status: string;
+  /** False on a repeat approval: no new tickets were issued (AC-PAY-03). */
+  transitioned: boolean;
+  issuedTicketCodes: string[];
+}
+
+export interface RejectPaymentResult {
+  orderId: string;
+  status: string;
+  transitioned: boolean;
+}
+
+export interface ProofUrlResult {
+  url: string;
+  expiresInSeconds: number | null;
+}
+
+/** Review queue: orders in WAITING_PAYMENT / PAYMENT_REVIEW status. */
+export function listOrdersForReview(limit = 100, signal?: AbortSignal) {
+  return adminRequest<ReviewQueueRow[]>(
+    `/admin/orders?limit=${encodeURIComponent(String(limit))}`,
+    { signal },
+  );
+}
+
+export function approvePayment(orderId: string) {
+  return adminRequest<ApprovePaymentResult>(
+    `/admin/orders/${encodeURIComponent(orderId)}/approve-payment`,
+    { method: 'POST' },
+  );
+}
+
+export function rejectPayment(orderId: string, reason: string) {
+  return adminRequest<RejectPaymentResult>(
+    `/admin/orders/${encodeURIComponent(orderId)}/reject-payment`,
+    { method: 'POST', body: { reason } },
+  );
+}
+
+/** Short-lived read URL for the stored proof file. */
+export function getPaymentProofUrl(paymentId: string) {
+  return adminRequest<ProofUrlResult>(
+    `/admin/payments/${encodeURIComponent(paymentId)}/proof-url`,
+  );
+}
+
+/** Legacy unfiltered audit read, kept for callers that need every row. */
 export function listAuditLogs(signal?: AbortSignal) {
   return adminRequest<ConfigResource[]>('/admin/audit-logs', { signal });
 }
 
-export async function searchCheckIn(term: string, signal?: AbortSignal) {
-  return adminRequest<ConfigResource[]>('/admin/check-in/search', {
+/* ------------------------------------------------------------------ */
+/* Orders — list, detail, expire sweep                                  */
+/* ------------------------------------------------------------------ */
+
+/** One row of the order list (GET /admin/orders/:id and the review queue). */
+export interface OrderRow {
+  id: string;
+  order_number: string;
+  status: string;
+  total_amount: number;
+  subtotal_amount: number;
+  discount_amount: number;
+  expires_at: string | null;
+  created_at: string;
+  customer_name: string;
+  customer_email: string | null;
+  customer_phone: string;
+  payment_id: string | null;
+  payment_method: string | null;
+  payment_amount: number | null;
+  payment_status: string | null;
+  proof_file_key: string | null;
+  external_reference: string | null;
+  submitted_at: string | null;
+}
+
+export interface OrderTicket {
+  ticket_code: string;
+  status: string;
+}
+
+export interface OrderDetail extends OrderRow {
+  tickets: OrderTicket[];
+}
+
+export interface ExpireSweepResult {
+  expired: number;
+}
+
+/**
+ * Order list (GET /admin/orders).
+ *
+ * The backend currently returns the finance review queue for this path; the
+ * optional query values are forwarded so the page keeps working unchanged if the
+ * route gains status/limit filters server-side.
+ */
+export function listOrders(
+  params: { status?: string; limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+): Promise<OrderRow[]> {
+  const search = new URLSearchParams();
+  if (params.status) search.set('status', params.status);
+  if (params.limit) search.set('limit', String(params.limit));
+  if (params.offset) search.set('offset', String(params.offset));
+  const query = search.toString();
+  return adminRequest<OrderRow[]>(`/admin/orders${query ? `?${query}` : ''}`, { signal });
+}
+
+/** Single order with its issued tickets. GET /admin/orders/:id (order:read). */
+export function getOrderDetail(orderId: string, signal?: AbortSignal): Promise<OrderDetail> {
+  return adminRequest<OrderDetail>(`/admin/orders/${encodeURIComponent(orderId)}`, { signal });
+}
+
+/** Manual sweep for expired orders; safe to call repeatedly (order:write). */
+export function runExpireSweep(): Promise<ExpireSweepResult> {
+  return adminRequest<ExpireSweepResult>('/admin/orders/expire-sweep', { method: 'POST' });
+}
+
+/* ------------------------------------------------------------------ */
+/* Audit logs                                                           */
+/* ------------------------------------------------------------------ */
+
+export interface AuditLogRow {
+  id: string;
+  actor_user_id: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  before_data: Record<string, unknown> | null;
+  after_data: Record<string, unknown> | null;
+  request_id: string | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export interface AuditLogsParams {
+  entityType?: string;
+  action?: string;
+  limit?: number;
+}
+
+/** Filtered audit read. GET /admin/audit-logs (permission audit:read). */
+export function listAuditLogsDetailed(
+  params: AuditLogsParams = {},
+  signal?: AbortSignal,
+): Promise<AuditLogRow[]> {
+  const search = new URLSearchParams();
+  if (params.entityType) search.set('entityType', params.entityType);
+  if (params.action) search.set('action', params.action);
+  if (params.limit) search.set('limit', String(params.limit));
+  const query = search.toString();
+  return adminRequest<AuditLogRow[]>(`/admin/audit-logs${query ? `?${query}` : ''}`, {
     signal,
-    body: term === '' ? undefined : { q: term },
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Souvenir customizations                                              */
+/* ------------------------------------------------------------------ */
+
+export interface SouvenirCustomizationRow {
+  id: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  ticket_code: string | null;
+  holder_name_snapshot: string | null;
+  option_group_id: string | null;
+  option_id: string | null;
+  quantity: number | null;
+  option_group_snapshot: Record<string, unknown> | null;
+  option_snapshot: Record<string, unknown> | null;
+}
+
+export interface SouvenirAdvanceResult {
+  id: string;
+  status: string;
+}
+
+/** Fulfilment queue. GET /admin/souvenir-customizations (permission report:read). */
+export function listSouvenirCustomizations(
+  status?: string,
+  signal?: AbortSignal,
+): Promise<SouvenirCustomizationRow[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  return adminRequest<SouvenirCustomizationRow[]>(`/admin/souvenir-customizations${query}`, {
+    signal,
+  });
+}
+
+/**
+ * Advances the fulfilment state. POST /admin/souvenir-customizations/:id/advance
+ * (permission config:write). The backend validates the transition and rejects a
+ * skip with 409; this client never validates locally.
+ */
+export function advanceSouvenirStatus(
+  customizationId: string,
+  status: string,
+): Promise<SouvenirAdvanceResult> {
+  return adminRequest<SouvenirAdvanceResult>(
+    `/admin/souvenir-customizations/${encodeURIComponent(customizationId)}/advance`,
+    { method: 'POST', body: { status } },
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Attendance scanning                                                  */
+/* ------------------------------------------------------------------ */
+
+/** One ticket row from GET /admin/check-in/search (BR-ATT-07). */
+export interface CheckInSearchRow {
+  ticket_code?: string | null;
+  status?: string | null;
+  holder_name_snapshot?: string | null;
+  congregation_name_snapshot?: string | null;
+  offer_name?: string | null;
+  is_inside?: boolean | null;
+  session_count?: number | null;
+  last_entry_at?: string | null;
+  [key: string]: unknown;
+}
+
+/**
+ * Body for POST /admin/check-in/entry and /admin/check-in/exit.
+ *
+ * The backend requires EXACTLY one of the two fields (attendance.routes.ts
+ * `scanBody` refine), so the UI must never send both or neither. Build the body
+ * from the scanner origin: a decoded QR yields `qrToken`, a typed or hardware-
+ * scanner code yields `ticketCode`.
+ */
+export type ScanLookup =
+  | { ticketCode: string; qrToken?: never }
+  | { qrToken: string; ticketCode?: never };
+
+/**
+ * Outcome of a scan. `status` is decided entirely by the backend; this client
+ * never derives it. The documented vocabulary is CHECKED_IN, CHECKED_OUT,
+ * ALREADY_INSIDE, ALREADY_OUTSIDE and INVALID_TICKET, with anything else
+ * passed through as a neutral result.
+ */
+export interface ScanOutcome {
+  status: string;
+  sessionId?: string | null;
+  ticketCode?: string | null;
+  holderName?: string | null;
+  entryAt?: string | null;
+  exitAt?: string | null;
+  reentryCount?: number | null;
+  [key: string]: unknown;
+}
+
+function scanBody(lookup: ScanLookup): Record<string, string> {
+  // Exactly one field, matching the backend refine.
+  return 'ticketCode' in lookup && lookup.ticketCode
+    ? { ticketCode: lookup.ticketCode }
+    : { qrToken: (lookup as { qrToken: string }).qrToken };
+}
+
+/** Records an ENTRY. POST /admin/check-in/entry, permission attendance:scan. */
+export function scanEntry(lookup: ScanLookup): Promise<ScanOutcome> {
+  return adminRequest<ScanOutcome>('/admin/check-in/entry', {
+    method: 'POST',
+    body: scanBody(lookup),
+  });
+}
+
+/** Records an EXIT. POST /admin/check-in/exit, permission attendance:scan. */
+export function scanExit(lookup: ScanLookup): Promise<ScanOutcome> {
+  return adminRequest<ScanOutcome>('/admin/check-in/exit', {
+    method: 'POST',
+    body: scanBody(lookup),
+  });
+}
+
+/**
+ * Autocomplete / manual-lookup helper. GET /admin/check-in/search?q=…
+ * (permission attendance:scan), returning rows verbatim for the caller to
+ * render. An empty term resolves to [] without hitting the backend, since the
+ * route requires a non-empty `q` (searchQuery: min 1).
+ */
+export function searchCheckIn(
+  term: string,
+  signal?: AbortSignal,
+): Promise<CheckInSearchRow[]> {
+  const query = term.trim();
+  if (query.length === 0) return Promise.resolve([]);
+  return adminRequest<CheckInSearchRow[]>(
+    `/admin/check-in/search?q=${encodeURIComponent(query)}`,
+    { signal },
+  );
 }

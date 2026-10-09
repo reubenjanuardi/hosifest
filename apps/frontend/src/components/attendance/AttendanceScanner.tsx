@@ -1,19 +1,21 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ApiError } from '@/lib/api';
 import {
-  ApiError,
-  recordAttendance,
-  searchTicketForAttendance,
-  type AttendanceResult,
-  type CheckInSearchResult,
-} from '@/lib/api';
+  scanEntry,
+  scanExit,
+  searchCheckIn,
+  type CheckInSearchRow,
+  type ScanOutcome,
+} from '@/lib/admin-api';
 import { describeAttendanceStatus, describeTicketStatus } from '@/lib/format';
 import { Button } from '@/components/ui/Button';
 import { Callout } from '@/components/ui/Callout';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { cn } from '@/components/ui/cn';
+import { QrCameraScanner } from './QrCameraScanner';
 
 type Mode = 'entry' | 'exit';
 
@@ -26,8 +28,27 @@ const RESULT_PANEL: Record<string, string> = {
   neutral: 'border-ink-400 bg-ink-50 text-ink-900',
 };
 
+/** Feedback shown for one scan, whether it succeeded or was rejected. */
+interface Feedback {
+  status: string;
+  ticketCode?: string | null;
+  holderName?: string | null;
+  /** Server message shown under the banner when it adds detail. */
+  note?: string | null;
+}
+
+/** Maps backend error codes to the staff-facing vocabulary. */
+const ERROR_CODE_TO_STATUS: Record<string, string> = {
+  ALREADY_INSIDE: 'ALREADY_INSIDE',
+  ALREADY_OUTSIDE: 'ALREADY_OUTSIDE',
+  INVALID_TICKET: 'INVALID_TICKET',
+  TICKET_NOT_VALID: 'INVALID_TICKET',
+  CONGREGATION_REQUIRED: 'CONGREGATION_REQUIRED',
+};
+
 /**
- * Attendance scanning screen (IA doc 18 §10).
+ * The scan vocabulary the staff surface must speak (IA doc 18 §10):
+ * CHECKED IN / CHECKED OUT / ALREADY INSIDE / ALREADY OUTSIDE / INVALID TICKET.
  *
  * ENTRY MODE / EXIT MODE toggle, large touch targets, immediate unambiguous
  * feedback (CHECKED IN / CHECKED OUT / ALREADY INSIDE / ALREADY OUTSIDE /
@@ -39,12 +60,13 @@ const RESULT_PANEL: Record<string, string> = {
 export function AttendanceScanner() {
   const [mode, setMode] = useState<Mode>('entry');
   const [manualCode, setManualCode] = useState('');
-  const [scannerBuffer, setScannerBuffer] = useState('');
-  const [result, setResult] = useState<AttendanceResult | null>(null);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [searchResults, setSearchResults] = useState<CheckInSearchResult[]>([]);
+  const [searchResults, setSearchResults] = useState<CheckInSearchRow[]>([]);
   const [searching, setSearching] = useState(false);
+  const [lookupOpen, setLookupOpen] = useState(false);
   const manualInputRef = useRef<HTMLInputElement>(null);
 
   const submit = useCallback(
@@ -52,17 +74,47 @@ export function AttendanceScanner() {
       setBusy(true);
       setError(null);
       try {
-        const outcome = await recordAttendance(mode, input);
-        setResult(outcome);
+        const outcome: ScanOutcome =
+          mode === 'entry'
+            ? await scanEntry('ticketCode' in input && input.ticketCode
+                ? { ticketCode: input.ticketCode }
+                : { qrToken: (input as { qrToken: string }).qrToken })
+            : await scanExit('ticketCode' in input && input.ticketCode
+                ? { ticketCode: input.ticketCode }
+                : { qrToken: (input as { qrToken: string }).qrToken });
+
+        setFeedback({
+          status: outcome.status,
+          ticketCode: outcome.ticketCode,
+          holderName: outcome.holderName,
+          note: null,
+        });
         setManualCode('');
-        setScannerBuffer('');
       } catch (caught) {
-        setResult(null);
-        setError(
+        const mapped =
           caught instanceof ApiError
-            ? caught.message
-            : 'The scan could not be processed. Check your connection.',
-        );
+            ? ERROR_CODE_TO_STATUS[caught.code]
+            : undefined;
+
+        if (mapped) {
+          // A rejection is a real, expected result — show it in the feedback
+          // banner rather than as an error, and keep the queue moving.
+          const details = (caught as ApiError).details;
+          setFeedback({
+            status: mapped,
+            ticketCode:
+              typeof details?.ticketCode === 'string' ? details.ticketCode : null,
+            holderName: null,
+            note: caught instanceof Error ? caught.message : null,
+          });
+        } else {
+          setFeedback(null);
+          setError(
+            caught instanceof ApiError
+              ? caught.message
+              : 'The scan could not be processed. Check your connection.',
+          );
+        }
       } finally {
         setBusy(false);
       }
@@ -71,26 +123,51 @@ export function AttendanceScanner() {
   );
 
   /**
-   * Hardware scanners type the decoded QR and then send Enter. Capturing that
+   * Hardware scanners type the decoded code and then send Enter. Capturing that
    * pattern lets the same screen work with or without a camera.
    */
   useEffect(() => {
+    let buffer = '';
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Enter') {
-        if (event.key.length === 1 && !event.metaKey && !event.ctrlKey) {
-          setScannerBuffer((current) => current + event.key);
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      const typingInField =
+        target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
+
+      if (typingInField) return;
+
+      if (event.key === 'Enter') {
+        const code = buffer.trim();
+        buffer = '';
+        if (code.length > 0) {
+          event.preventDefault();
+          void submit({ ticketCode: code });
         }
         return;
       }
-      if (scannerBuffer.trim().length > 0) {
-        event.preventDefault();
-        void submit({ ticketCode: scannerBuffer.trim() });
+
+      // Ignore modifier/navigation keys; accumulate the printable rest.
+      if (event.key.length === 1) buffer += event.key;
+      // Fast typists lose the first characters between frames, so drop the
+      // buffer after an idle gap and start clean on the next scan.
+      if (buffer.length > 0) {
+        window.clearTimeout(resetTimer);
+        resetTimer = window.setTimeout(() => {
+          buffer = '';
+        }, RESET_MS);
       }
     };
 
+    let resetTimer = 0;
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [scannerBuffer, submit]);
+    return () => {
+      window.clearTimeout(resetTimer);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [submit]);
+
+  /** Idle gap that ends a hardware-scanner burst. */
+  const RESET_MS = 120;
 
   const search = async () => {
     if (manualCode.trim().length < 3) {
@@ -101,7 +178,7 @@ export function AttendanceScanner() {
     setError(null);
     setSearchResults([]);
     try {
-      const found = await searchTicketForAttendance(manualCode.trim());
+      const found = await searchCheckIn(manualCode.trim());
       setSearchResults(found);
       if (found.length === 0) {
         setError('No ticket matched that code.');
@@ -117,7 +194,7 @@ export function AttendanceScanner() {
     }
   };
 
-  const status = result ? describeAttendanceStatus(result.status) : null;
+  const status = feedback ? describeAttendanceStatus(feedback.status) : null;
 
   return (
     <div className="space-y-6">
@@ -133,7 +210,7 @@ export function AttendanceScanner() {
           aria-pressed={mode === 'entry'}
           onClick={() => {
             setMode('entry');
-            setResult(null);
+            setFeedback(null);
           }}
           className={cn(
             'text-xl tracking-wide',
@@ -148,7 +225,7 @@ export function AttendanceScanner() {
           aria-pressed={mode === 'exit'}
           onClick={() => {
             setMode('exit');
-            setResult(null);
+            setFeedback(null);
           }}
           className={cn(
             'text-xl tracking-wide',
@@ -165,7 +242,7 @@ export function AttendanceScanner() {
 
       {/* Immediate, unambiguous feedback */}
       <div aria-live="assertive" aria-atomic="true">
-        {status && result ? (
+        {status && feedback ? (
           <div
             className={cn(
               'animate-pulse-ring rounded-2xl border-4 p-8 text-center',
@@ -179,23 +256,20 @@ export function AttendanceScanner() {
             <p className="mt-3 text-base font-semibold sm:text-lg">
               {status.description}
             </p>
-            {result.holderNameSnapshot ? (
-              <p className="mt-4 text-2xl font-bold">{result.holderNameSnapshot}</p>
+            {feedback.holderName ? (
+              <p className="mt-4 text-2xl font-bold">{feedback.holderName}</p>
             ) : null}
             <dl className="mx-auto mt-4 max-w-sm space-y-1 text-sm">
-              {result.ticketCode ? (
+              {feedback.ticketCode ? (
                 <div className="flex justify-between gap-3">
                   <dt>Ticket</dt>
-                  <dd className="font-mono font-bold">{result.ticketCode}</dd>
-                </div>
-              ) : null}
-              {result.ticketTypeName ? (
-                <div className="flex justify-between gap-3">
-                  <dt>Type</dt>
-                  <dd className="font-bold">{result.ticketTypeName}</dd>
+                  <dd className="font-mono font-bold">{feedback.ticketCode}</dd>
                 </div>
               ) : null}
             </dl>
+            {feedback.note ? (
+              <p className="mt-3 text-sm opacity-80">{feedback.note}</p>
+            ) : null}
           </div>
         ) : (
           <div className="rounded-2xl border-2 border-dashed border-ink-300 bg-white p-8 text-center text-ink-500">
@@ -213,9 +287,20 @@ export function AttendanceScanner() {
       <Card>
         <CardHeader
           title="Scanner"
-          description="Point the scanner at the ticket QR, or type the ticket code and press Enter."
+          description="Start the camera and hold the ticket QR inside the frame, or type the ticket code and press Enter."
         />
         <CardBody className="space-y-4">
+          <QrCameraScanner
+            active={cameraOn}
+            disabled={busy}
+            onDecode={(decodedText) => {
+              // A decoded QR is an opaque token, never a ticket code: send it as
+              // qrToken so the backend resolves it by hash.
+              void submit({ qrToken: decodedText });
+            }}
+            onRunningChange={setCameraOn}
+          />
+
           <div>
             <label
               htmlFor="manual-code"
@@ -258,30 +343,39 @@ export function AttendanceScanner() {
               Look up a ticket without recording attendance
             </summary>
             <div className="mt-3 space-y-3">
-              <Button variant="secondary" onClick={() => void search()} disabled={searching}>
+              <Button
+                variant="secondary"
+                onClick={() => void search()}
+                disabled={searching || manualCode.trim().length < 3}
+              >
                 {searching ? 'Searching…' : 'Search ticket'}
               </Button>
               {searchResults.length > 0 ? (
                 <ul className="space-y-2">
                   {searchResults.map((found) => (
                     <li
-                      key={found.ticketCode}
+                      key={found.ticket_code ?? String(found.holder_name_snapshot)}
                       className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-ink-200 bg-white px-4 py-3"
                     >
                       <span>
                         <span className="block font-mono font-bold">
-                          {found.ticketCode}
+                          {found.ticket_code ?? '—'}
                         </span>
                         <span className="block text-sm text-ink-700">
-                          {found.holderNameSnapshot ?? 'Unknown holder'}
+                          {found.holder_name_snapshot ?? 'Unknown holder'}
                         </span>
                       </span>
-                      <span className="flex items-center gap-2">
+                      <span className="flex flex-wrap items-center gap-2">
+                        {found.offer_name ? (
+                          <span className="text-xs text-ink-600">
+                            {found.offer_name}
+                          </span>
+                        ) : null}
                         <StatusBadge
                           status={describeTicketStatus(found.status)}
                           size="sm"
                         />
-                        {found.currentlyInside ? (
+                        {found.is_inside ? (
                           <span className="rounded-full bg-brand-100 px-2.5 py-1 text-xs font-bold text-brand-900">
                             Currently inside
                           </span>

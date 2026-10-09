@@ -50,6 +50,62 @@ export function adminOrderRoutes(container: Container): FastifyPluginAsync {
       });
     });
 
+    /**
+     * Review queue: orders awaiting a finance decision.
+     *
+     * Both statuses are listed because WAITING_PAYMENT rows can still gain a
+     * submitted proof at any moment, and the operator needs to see them as part
+     * of the same backlog. The queue is read-only — every transition goes
+     * through the approve/reject endpoints so the state machine stays in the
+     * domain layer.
+     */
+    app.get('/admin/orders', async (request, reply) => {
+      authorize(request, 'payment:review');
+      const query = parseOrThrow(
+        z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(100),
+        }),
+        request.query ?? {},
+      );
+
+      const { rows } = await container.db.query(
+        `SELECT ord.id,
+                ord.order_number,
+                ord.status,
+                ord.total_amount,
+                ord.subtotal_amount,
+                ord.discount_amount,
+                ord.expires_at,
+                ord.created_at,
+                c.name  AS customer_name,
+                c.email AS customer_email,
+                c.phone AS customer_phone,
+                pay.id           AS payment_id,
+                pay.method       AS payment_method,
+                pay.amount       AS payment_amount,
+                pay.status       AS payment_status,
+                pay.proof_file_key AS proof_file_key,
+                pay.external_reference,
+                pay.submitted_at
+           FROM orders ord
+           JOIN customers c ON c.id = ord.customer_id
+           LEFT JOIN LATERAL (
+             SELECT p.* FROM payments p
+              WHERE p.order_id = ord.id
+              ORDER BY (p.status = 'SUBMITTED') DESC, p.created_at DESC
+              LIMIT 1
+           ) pay ON TRUE
+          WHERE ord.status IN ('WAITING_PAYMENT', 'PAYMENT_REVIEW')
+          ORDER BY (ord.status = 'PAYMENT_REVIEW') DESC,
+                   pay.submitted_at ASC NULLS LAST,
+                   ord.created_at DESC
+          LIMIT $1`,
+        [query.limit],
+      );
+
+      return sendData(reply, rows);
+    });
+
     app.get('/admin/orders/:id', async (request, reply) => {
       authorize(request, 'order:read');
       const { id } = parseOrThrow(idParams, request.params);

@@ -52,7 +52,10 @@ function jobSource(workflow: string, jobName: string): string {
   // Consume until the next job key at the same indent (or end of file).
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[i])) {
+    // `noUncheckedIndexedAccess` makes every index `string | undefined`; the
+    // regex test needs a definite string, and a missing line can only be
+    // undefined through a bug in the split, so the guard is a no-op at runtime.
+    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[i] ?? '')) {
       end = i;
       break;
     }

@@ -137,6 +137,27 @@ export function DashboardClient() {
           </Callout>
         ) : null}
 
+        {/* Quick links to admin sections */}
+        <Card>
+          <CardHeader title="Admin sections" description="Jump to the operational screens." />
+          <CardBody>
+            <nav className="flex flex-wrap gap-2" aria-label="Admin section links">
+              <a href="/admin/orders" className="rounded-lg border border-ink-200 bg-white px-4 py-2 text-sm font-semibold text-ink-900 hover:border-brand-500 hover:bg-brand-50 transition-colors">
+                Orders
+              </a>
+              <a href="/admin/attendance" className="rounded-lg border border-ink-200 bg-white px-4 py-2 text-sm font-semibold text-ink-900 hover:border-brand-500 hover:bg-brand-50 transition-colors">
+                Attendance
+              </a>
+              <a href="/admin/souvenir-customizations" className="rounded-lg border border-ink-200 bg-white px-4 py-2 text-sm font-semibold text-ink-900 hover:border-brand-500 hover:bg-brand-50 transition-colors">
+                Souvenir customizations
+              </a>
+              <a href="/admin/audit-logs" className="rounded-lg border border-ink-200 bg-white px-4 py-2 text-sm font-semibold text-ink-900 hover:border-brand-500 hover:bg-brand-50 transition-colors">
+                Audit logs
+              </a>
+            </nav>
+          </CardBody>
+        </Card>
+
         {/* Current sales phase */}
         <Card>
           <CardHeader title="Current sales phase" description="Read from the backend." />

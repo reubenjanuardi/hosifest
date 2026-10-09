@@ -49,6 +49,7 @@ export function OrderStatusView({
   const [proofDone, setProofDone] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  /** Refreshes the order from the server. Safe to call repeatedly. */
   const refresh = useCallback(async () => {
     try {
       const next = await getOrder(orderNumber);
@@ -69,6 +70,15 @@ export function OrderStatusView({
       setLoading(false);
     }
   }, [orderNumber]);
+
+  /** Polls while the order is still waiting for payment. */
+  useEffect(() => {
+    if (order?.status !== 'WAITING_PAYMENT') return;
+    const interval = window.setInterval(() => {
+      void refresh();
+    }, 15000);
+    return () => window.clearInterval(interval);
+  }, [order?.status, refresh]);
 
   useEffect(() => {
     if (initialOrder) return;

@@ -3,7 +3,11 @@
   "compilerOptions": {
     "noEmit": false,
     "rootDir": ".",
-    "outDir": "dist-scripts"
+    "outDir": "dist-scripts",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
   },
-  "include": ["scripts/**/*.ts"]
+  "include": ["scripts/**/*.ts", "src/**/*.ts"]
 }

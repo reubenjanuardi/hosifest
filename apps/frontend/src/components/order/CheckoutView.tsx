@@ -6,11 +6,12 @@ import {
   ApiError,
   createOrder,
   EVENT_SLUG,
+  getOrder,
   type CreateOrderRequest,
   type Order,
   type TicketOffer,
 } from '@/lib/api';
-import { formatMoney, normalizePhone } from '@/lib/format';
+import { formatMoney, normalizePhone, describeOrderStatus } from '@/lib/format';
 import {
   clearOrderDraft,
   loadCatalogSnapshot,
@@ -57,6 +58,7 @@ export function CheckoutView({ offers }: CheckoutViewProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdOrder, setCreatedOrder] = useState<Order | null>(null);
+  const [polling, setPolling] = useState(false);
 
   // Draft lives in localStorage, so it is only available after mount.
   useEffect(() => {
@@ -64,6 +66,30 @@ export function CheckoutView({ offers }: CheckoutViewProps) {
     setCatalog(loadCatalogSnapshot());
     setReady(true);
   }, []);
+
+  /**
+   * Once the order exists, its status can change without this page acting:
+   * the committee may verify the payment, or the payment window may lapse.
+   * Poll so the screen never shows a stale WAITING_PAYMENT next to an
+   * already-verified order.
+   */
+  useEffect(() => {
+    if (!createdOrder) return;
+    if (createdOrder.status !== 'WAITING_PAYMENT') return;
+    setPolling(true);
+    const interval = window.setInterval(() => {
+      void (async () => {
+        try {
+          const next = await getOrder(createdOrder.orderNumber);
+          setCreatedOrder(next);
+          if (next.status !== 'WAITING_PAYMENT') setPolling(false);
+        } catch {
+          // A transient failure must not clear the screen; the next tick retries.
+        }
+      })();
+    }, 10000);
+    return () => window.clearInterval(interval);
+  }, [createdOrder]);
 
   const tickets: DraftTicketSelection[] = draft?.tickets ?? [];
 
@@ -500,12 +526,41 @@ export function CheckoutView({ offers }: CheckoutViewProps) {
 
           {createdOrder ? (
             <div className="space-y-3">
-              <Callout tone="success" title="Order placed — tickets reserved">
-                Your tickets are reserved until{' '}
-                {createdOrder.expiresAt
-                  ? new Date(createdOrder.expiresAt).toLocaleString('id-ID')
-                  : 'the payment window ends'}
-                . Submit your payment proof on the order page to keep them.
+              <Callout
+                tone={createdOrder.status === 'WAITING_PAYMENT' ? 'progress' : 'success'}
+                title={
+                  createdOrder.status === 'WAITING_PAYMENT'
+                    ? 'Order placed — tickets reserved'
+                    : 'Order status updated'
+                }
+              >
+                {createdOrder.status === 'WAITING_PAYMENT' ? (
+                  <>
+                    Your tickets are reserved until{' '}
+                    {createdOrder.expiresAt
+                      ? new Date(createdOrder.expiresAt).toLocaleString('id-ID')
+                      : 'the payment window ends'}
+                    . Submit your payment proof on the order page to keep them.
+                    {polling ? (
+                      <span className="mt-2 block text-xs">
+                        Checking the ticketing system for updates…
+                      </span>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    This order is now{' '}
+                    <strong>{describeOrderStatus(createdOrder.status).label}</strong>
+                    .{' '}
+                    <Link
+                      className="font-semibold underline"
+                      href={`/order/${encodeURIComponent(createdOrder.orderNumber)}`}
+                    >
+                      View the latest status and your e-tickets
+                    </Link>
+                    .
+                  </>
+                )}
               </Callout>
               <Link
                 href={`/order/${encodeURIComponent(createdOrder.orderNumber)}`}
