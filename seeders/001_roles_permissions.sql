@@ -1,8 +1,29 @@
 -- 001_roles_permissions.sql
 -- Seed roles and permissions aligned with apps/backend/src/modules/identity/rbac.ts
--- All inserts are idempotent (ON CONFLICT DO NOTHING).
+-- Idempotent: every step is a wipe-then-reinsert or ON CONFLICT DO NOTHING, so
+-- this file can be re-applied against an already-seeded database.
 --
 -- Deterministic UUIDs are used so later seed files can reference these rows.
+--
+-- IMPORTANT: the pre-rewrite seed used the SAME deterministic IDs with DIFFERENT
+-- codes (roles: ...101 SUPER_ADMIN, ...104 CHECKIN, ...105 SOUVENIR;
+-- permissions: 201 ticket:write, 202 catalog:write, 203 promotion:write,
+-- 205 payment:read, 208 attendance:write, 209 souvenir:read, 211 user:manage, ...).
+-- A plain INSERT ... ON CONFLICT (code) fails on roles_pkey / permissions_pkey
+-- because the PK id clashes FIRST. Strategy: stash the current user -> role-code
+-- assignments in a TEMP table, wipe roles/permissions, insert the new catalogue,
+-- then restore assignments mapped onto the new codes. On a fresh DB the stash is
+-- empty and every DELETE is a no-op; on re-run the stash holds current-code
+-- assignments that map back onto the same deterministic ids.
+
+-- Step 0: stash current user -> role-code assignments.
+CREATE TEMP TABLE _legacy_user_roles AS
+SELECT ur.user_id, r.code
+  FROM user_roles ur
+  JOIN roles r ON r.id = ur.role_id;
+
+-- Step 1: wipe roles (cascades user_roles + role_permissions) and re-insert.
+DELETE FROM roles;
 
 INSERT INTO roles (id, code, name, description) VALUES
   ('11111111-1111-4111-8111-111111111101', 'ADMIN', 'Administrator',
@@ -10,45 +31,37 @@ INSERT INTO roles (id, code, name, description) VALUES
   ('11111111-1111-4111-8111-111111111102', 'FINANCE', 'Finance/Admin',
    'View and review payment proofs; view financial reports and orders.'),
   ('11111111-1111-4111-8111-111111111103', 'ATTENDANCE', 'Check-in Staff',
-   'Scan QR for ENTRY and EXIT; search ticket codes; view attendance reports.')
-ON CONFLICT (code) DO NOTHING;
+   'Scan QR for ENTRY and EXIT; search ticket codes; view attendance reports.');
 
--- Legacy role codes from the previous seed. rbac.ts never accepted them, so any
--- account holding only one of these could not log in. They are remapped to the
--- role the backend actually recognises, then deleted (user_roles and
--- role_permissions cascade).
+-- Step 2: restore assignments mapped to the role the backend recognises.
+-- SUPER_ADMIN / ADMIN / SOUVENIR -> ADMIN (SOUVENIR has no rbac.ts counterpart;
+-- souvenir catalog admin needs config:write, which only ADMIN has).
 INSERT INTO user_roles (user_id, role_id)
-SELECT ur.user_id, r.id
-  FROM user_roles ur
-  JOIN roles legacy ON legacy.id = ur.role_id
-  JOIN roles r      ON r.code = 'ADMIN'
- WHERE legacy.code = 'SUPER_ADMIN'
+SELECT DISTINCT user_id, '11111111-1111-4111-8111-111111111101'::uuid
+  FROM _legacy_user_roles
+ WHERE code IN ('SUPER_ADMIN', 'ADMIN', 'SOUVENIR')
 ON CONFLICT DO NOTHING;
 
+-- FINANCE -> FINANCE (same concept, new deterministic id).
 INSERT INTO user_roles (user_id, role_id)
-SELECT ur.user_id, r.id
-  FROM user_roles ur
-  JOIN roles legacy ON legacy.id = ur.role_id
-  JOIN roles r      ON r.code = 'ATTENDANCE'
- WHERE legacy.code = 'CHECKIN'
+SELECT DISTINCT user_id, '11111111-1111-4111-8111-111111111102'::uuid
+  FROM _legacy_user_roles
+ WHERE code = 'FINANCE'
 ON CONFLICT DO NOTHING;
 
--- SOUVENIR has no counterpart in rbac.ts. Souvenir catalog administration is
--- only reachable through config:write, which rbac.ts grants to ADMIN, so the
--- mapping is ADMIN rather than silently downgrading the operator.
+-- CHECKIN / ATTENDANCE -> ATTENDANCE.
 INSERT INTO user_roles (user_id, role_id)
-SELECT ur.user_id, r.id
-  FROM user_roles ur
-  JOIN roles legacy ON legacy.id = ur.role_id
-  JOIN roles r      ON r.code = 'ADMIN'
- WHERE legacy.code = 'SOUVENIR'
+SELECT DISTINCT user_id, '11111111-1111-4111-8111-111111111103'::uuid
+  FROM _legacy_user_roles
+ WHERE code IN ('CHECKIN', 'ATTENDANCE')
 ON CONFLICT DO NOTHING;
 
-DELETE FROM roles WHERE code IN ('SUPER_ADMIN', 'CHECKIN', 'SOUVENIR');
+DROP TABLE _legacy_user_roles;
 
--- Permission catalogue. Codes mirror rbac.ts PERMISSIONS exactly; the role ->
--- permission grants below record the same shape as ROLE_PERMISSIONS so the
--- database stays readable next to the code that enforces access.
+-- Step 3: wipe permissions (cascades role_permissions) and re-insert the
+-- catalogue. Codes mirror rbac.ts PERMISSIONS exactly.
+DELETE FROM permissions;
+
 INSERT INTO permissions (id, code, description) VALUES
   ('22222222-2222-4222-8222-222222222201', 'config:read',    'Read administrative configuration.'),
   ('22222222-2222-4222-8222-222222222202', 'config:write',   'Create or modify administrative configuration.'),
@@ -58,16 +71,7 @@ INSERT INTO permissions (id, code, description) VALUES
   ('22222222-2222-4222-8222-222222222206', 'ticket:read',    'Look up tickets and QR codes.'),
   ('22222222-2222-4222-8222-222222222207', 'attendance:scan','Record ENTRY and EXIT scans.'),
   ('22222222-2222-4222-8222-222222222208', 'report:read',    'Read reporting endpoints.'),
-  ('22222222-2222-4222-8222-222222222209', 'audit:read',     'Read audit logs.')
-ON CONFLICT (code) DO NOTHING;
-
--- Permission codes from the previous seed that rbac.ts never defines. They are
--- removed so the catalogue cannot drift into implying grants that do not exist.
-DELETE FROM permissions
- WHERE code NOT IN (
-   'config:read', 'config:write', 'order:read', 'order:write', 'payment:review',
-   'ticket:read', 'attendance:scan', 'report:read', 'audit:read'
- );
+  ('22222222-2222-4222-8222-222222222209', 'audit:read',     'Read audit logs.');
 
 -- ADMIN is a superset: rbac.ts grants it every permission.
 INSERT INTO role_permissions (role_id, permission_id)
